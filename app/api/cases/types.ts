@@ -27,10 +27,12 @@ export interface Case {
   status: StatusType;
   justification?: string;
   recdEG?: boolean;
-  catalogueData?: Record<string, any>;
-  egData?: Record<string, any>;
-  applicationData?: Record<string, any>;
+  catalogueData?: Record<string, unknown>;
+  egData?: Record<string, unknown>;
+  applicationData?: Record<string, unknown>;
   categoryId?: string;
+  tranche?: string;
+  season?: string;
   createdAt?: string;
   updatedAt?: string;
 }

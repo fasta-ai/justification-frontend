@@ -279,6 +279,16 @@ const egFields = [
   "D_EGF_ASWD",
   "FUF_Comp_YN",
   "DatEntry",
+  "Q12a",
+  "Q12b_Jus",
+  "Q12c_TotC",
+  "Q12d_Quo",
+  "Q12e_JCost",
+  "Q12f_RReject",
+  "Q12g_JRem",
+  "Q13a",
+  "Q13b",
+  "Remarks_EGF",
 ];
 
 const appFields = [
@@ -2072,29 +2082,22 @@ export function Stage3Approval({ onBack, onComplete }: Stage3ApprovalProps) {
               {activeTab === "eg" && (
                 <div className="border-t pt-4">
                   <div className="grid grid-cols-3 gap-3">
-                    {egFields
-                      .filter(
-                        (field) =>
-                          editingCase?.egData?.[field] !== undefined &&
-                          editingCase?.egData?.[field] !== null &&
-                          editingCase?.egData?.[field] !== "",
-                      )
-                      .map((field) => (
-                        <div key={field} className="space-y-1">
-                          <Label className="text-xs">{field}</Label>
-                          <Input
-                            value={egFormData[field] || ""}
-                            onChange={(e) =>
-                              setEgFormData((prev) => ({
-                                ...prev,
-                                [field]: e.target.value,
-                              }))
-                            }
-                            className="text-sm"
-                            placeholder="/"
-                          />
-                        </div>
-                      ))}
+                    {egFields.map((field) => (
+                      <div key={field} className="space-y-1">
+                        <Label className="text-xs">{field}</Label>
+                        <Input
+                          value={egFormData[field] || ""}
+                          onChange={(e) =>
+                            setEgFormData((prev) => ({
+                              ...prev,
+                              [field]: e.target.value,
+                            }))
+                          }
+                          className="text-sm"
+                          placeholder="/"
+                        />
+                      </div>
+                    ))}
                   </div>
                 </div>
               )}

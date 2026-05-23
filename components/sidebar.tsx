@@ -10,6 +10,7 @@ import {
   Upload,
   CheckCircle,
   FileText,
+  FileCheck,
 } from "lucide-react";
 import Image from "next/image";
 import Link from "next/link";
@@ -43,9 +44,10 @@ export function Sidebar({ mobileMenuOpen, setMobileMenuOpen }: SidebarProps) {
           <Link
             href="/"
             title="Dashboard"
+            aria-current={pathname === "/" ? "page" : undefined}
             className={`p-3 rounded-lg transition-colors ${
-              pathname === "/" 
-                ? "bg-primary text-primary-foreground" 
+              pathname === "/"
+                ? "bg-primary text-primary-foreground"
                 : "hover:bg-accent text-foreground"
             }`}
           >
@@ -77,6 +79,18 @@ export function Sidebar({ mobileMenuOpen, setMobileMenuOpen }: SidebarProps) {
             >
               <Upload className="w-5 h-5" />
             </button>
+            <Link
+              href="/eg-upload"
+              title="EG Upload & Replace"
+              aria-current={pathname === "/eg-upload" ? "page" : undefined}
+              className={`p-3 rounded-lg transition-colors ${
+                pathname === "/eg-upload"
+                  ? "bg-primary text-primary-foreground"
+                  : "hover:bg-accent text-foreground"
+              }`}
+            >
+              <FileCheck className="w-5 h-5" />
+            </Link>
             <button
               title="Justification (Step 3)"
               onClick={() => setStage(3)}
@@ -124,11 +138,12 @@ export function Sidebar({ mobileMenuOpen, setMobileMenuOpen }: SidebarProps) {
               </button>
             </div>
             <nav className="p-4 space-y-2">
-              <Link 
+              <Link
                 href="/"
+                aria-current={pathname === "/" ? "page" : undefined}
                 className={`w-full flex items-center gap-3 px-4 py-2 rounded-lg text-sm font-medium ${
-                  pathname === "/" 
-                    ? "bg-primary text-primary-foreground" 
+                  pathname === "/"
+                    ? "bg-primary text-primary-foreground"
                     : "hover:bg-accent text-foreground"
                 }`}
                 onClick={() => setMobileMenuOpen(false)}
@@ -169,6 +184,19 @@ export function Sidebar({ mobileMenuOpen, setMobileMenuOpen }: SidebarProps) {
                   <Upload className="w-4 h-4" />
                   Extraction (Step 1)
                 </button>
+                <Link
+                  href="/eg-upload"
+                  aria-current={pathname === "/eg-upload" ? "page" : undefined}
+                  className={`w-full flex items-center gap-3 px-4 py-2 rounded-lg text-sm font-medium ${
+                    pathname === "/eg-upload"
+                      ? "bg-primary text-primary-foreground"
+                      : "hover:bg-accent text-foreground"
+                  }`}
+                  onClick={() => setMobileMenuOpen(false)}
+                >
+                  <FileCheck className="w-4 h-4" />
+                  EG Upload & Replace
+                </Link>
                 <button
                   onClick={() => {
                     setStage(3);

@@ -801,6 +801,176 @@ function ProductUploadCard({
                             />
                           </TableCell>
                         </TableRow>
+                        <TableRow>
+                          <TableCell className="text-xs font-medium text-muted-foreground">
+                            Q12a
+                          </TableCell>
+                          <TableCell className="text-xs">
+                            <Input
+                              value={editableEgData.Q12a || ""}
+                              onChange={(e) =>
+                                setEditableEgData((prev) => ({
+                                  ...prev,
+                                  Q12a: e.target.value,
+                                }))
+                              }
+                              className="h-6 text-xs"
+                            />
+                          </TableCell>
+                        </TableRow>
+                        <TableRow>
+                          <TableCell className="text-xs font-medium text-muted-foreground">
+                            Q12b Justification
+                          </TableCell>
+                          <TableCell className="text-xs">
+                            <Input
+                              value={editableEgData.Q12b_Jus || ""}
+                              onChange={(e) =>
+                                setEditableEgData((prev) => ({
+                                  ...prev,
+                                  Q12b_Jus: e.target.value,
+                                }))
+                              }
+                              className="h-6 text-xs"
+                            />
+                          </TableCell>
+                        </TableRow>
+                        <TableRow>
+                          <TableCell className="text-xs font-medium text-muted-foreground">
+                            Q12c Total Cost
+                          </TableCell>
+                          <TableCell className="text-xs">
+                            <Input
+                              value={editableEgData.Q12c_TotC || ""}
+                              onChange={(e) =>
+                                setEditableEgData((prev) => ({
+                                  ...prev,
+                                  Q12c_TotC: e.target.value,
+                                }))
+                              }
+                              className="h-6 text-xs"
+                            />
+                          </TableCell>
+                        </TableRow>
+                        <TableRow>
+                          <TableCell className="text-xs font-medium text-muted-foreground">
+                            Q12d Quotation
+                          </TableCell>
+                          <TableCell className="text-xs">
+                            <Input
+                              value={editableEgData.Q12d_Quo || ""}
+                              onChange={(e) =>
+                                setEditableEgData((prev) => ({
+                                  ...prev,
+                                  Q12d_Quo: e.target.value,
+                                }))
+                              }
+                              className="h-6 text-xs"
+                            />
+                          </TableCell>
+                        </TableRow>
+                        <TableRow>
+                          <TableCell className="text-xs font-medium text-muted-foreground">
+                            Q12e Justification Cost
+                          </TableCell>
+                          <TableCell className="text-xs">
+                            <Input
+                              value={editableEgData.Q12e_JCost || ""}
+                              onChange={(e) =>
+                                setEditableEgData((prev) => ({
+                                  ...prev,
+                                  Q12e_JCost: e.target.value,
+                                }))
+                              }
+                              className="h-6 text-xs"
+                            />
+                          </TableCell>
+                        </TableRow>
+                        <TableRow>
+                          <TableCell className="text-xs font-medium text-muted-foreground">
+                            Q12f Reject Reason
+                          </TableCell>
+                          <TableCell className="text-xs">
+                            <Input
+                              value={editableEgData.Q12f_RReject || ""}
+                              onChange={(e) =>
+                                setEditableEgData((prev) => ({
+                                  ...prev,
+                                  Q12f_RReject: e.target.value,
+                                }))
+                              }
+                              className="h-6 text-xs"
+                            />
+                          </TableCell>
+                        </TableRow>
+                        <TableRow>
+                          <TableCell className="text-xs font-medium text-muted-foreground">
+                            Q12g Justification Remarks
+                          </TableCell>
+                          <TableCell className="text-xs">
+                            <Input
+                              value={editableEgData.Q12g_JRem || ""}
+                              onChange={(e) =>
+                                setEditableEgData((prev) => ({
+                                  ...prev,
+                                  Q12g_JRem: e.target.value,
+                                }))
+                              }
+                              className="h-6 text-xs"
+                            />
+                          </TableCell>
+                        </TableRow>
+                        <TableRow>
+                          <TableCell className="text-xs font-medium text-muted-foreground">
+                            Q13a
+                          </TableCell>
+                          <TableCell className="text-xs">
+                            <Input
+                              value={editableEgData.Q13a || ""}
+                              onChange={(e) =>
+                                setEditableEgData((prev) => ({
+                                  ...prev,
+                                  Q13a: e.target.value,
+                                }))
+                              }
+                              className="h-6 text-xs"
+                            />
+                          </TableCell>
+                        </TableRow>
+                        <TableRow>
+                          <TableCell className="text-xs font-medium text-muted-foreground">
+                            Q13b
+                          </TableCell>
+                          <TableCell className="text-xs">
+                            <Input
+                              value={editableEgData.Q13b || ""}
+                              onChange={(e) =>
+                                setEditableEgData((prev) => ({
+                                  ...prev,
+                                  Q13b: e.target.value,
+                                }))
+                              }
+                              className="h-6 text-xs"
+                            />
+                          </TableCell>
+                        </TableRow>
+                        <TableRow>
+                          <TableCell className="text-xs font-medium text-muted-foreground">
+                            Remarks EGF
+                          </TableCell>
+                          <TableCell className="text-xs">
+                            <Input
+                              value={editableEgData.Remarks_EGF || ""}
+                              onChange={(e) =>
+                                setEditableEgData((prev) => ({
+                                  ...prev,
+                                  Remarks_EGF: e.target.value,
+                                }))
+                              }
+                              className="h-6 text-xs"
+                            />
+                          </TableCell>
+                        </TableRow>
                       </>
                     )}
 
