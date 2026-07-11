@@ -2,6 +2,14 @@ import { NEXT_PUBLIC_API_URL } from "@/lib/utils";
 import { NextRequest, NextResponse } from "next/server";
 import type { GetCasesResponse, CaseFilters } from "./types";
 
+function getAuthHeader(request: NextRequest): string | undefined {
+  const header = request.headers.get("authorization");
+  if (header) return header;
+  const accessToken = request.cookies.get("accessToken")?.value;
+  if (accessToken) return `Bearer ${accessToken}`;
+  return undefined;
+}
+
 export async function GET(request: NextRequest) {
     try {
         const { searchParams } = new URL(request.url);
@@ -35,12 +43,17 @@ export async function GET(request: NextRequest) {
 
         console.log("Fetching cases from:", url);
 
+        // Forward auth header if present
+        const authHeader = getAuthHeader(request);
+        const headers: Record<string, string> = {
+            "Content-Type": "application/json",
+        };
+        if (authHeader) headers.Authorization = authHeader;
+
         // Forward to backend API
         const backendResponse = await fetch(url, {
             method: "GET",
-            headers: {
-                "Content-Type": "application/json",
-            },
+            headers,
         });
 
         console.log("Backend response status:", backendResponse.status);

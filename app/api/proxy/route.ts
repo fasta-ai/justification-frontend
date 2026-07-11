@@ -1,5 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
 
+function getAuthHeader(request: NextRequest): string | undefined {
+  const header = request.headers.get("authorization");
+  if (header) return header;
+  const accessToken = request.cookies.get("accessToken")?.value;
+  if (accessToken) return `Bearer ${accessToken}`;
+  return undefined;
+}
+
 export async function POST(request: NextRequest) {
   try {
     const { backendUrl, ...body } = await request.json();
@@ -14,8 +22,8 @@ export async function POST(request: NextRequest) {
 
     const finalUrl = backendUrl || url;
 
-    // Get auth token from request headers
-    const authToken = request.headers.get("authorization");
+    // Get auth token from request headers or cookies
+    const authToken = getAuthHeader(request);
 
     const fetchOptions: RequestInit = {
       method: request.method,
@@ -66,7 +74,7 @@ export async function GET(request: NextRequest) {
       );
     }
 
-    const authToken = request.headers.get("authorization");
+    const authToken = getAuthHeader(request);
 
     const fetchOptions: RequestInit = {
       method: "GET",

@@ -1,6 +1,14 @@
 import { NextRequest, NextResponse } from "next/server";
 import { NEXT_PUBLIC_API_URL } from "@/lib/utils";
 
+function getAuthHeader(request: NextRequest): string | undefined {
+  const header = request.headers.get("authorization");
+  if (header) return header;
+  const accessToken = request.cookies.get("accessToken")?.value;
+  if (accessToken) return `Bearer ${accessToken}`;
+  return undefined;
+}
+
 export async function POST(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> },
@@ -24,13 +32,17 @@ export async function POST(
     // body.id = id;
 
     // Forward request to NestJS backend
+    const authHeader = getAuthHeader(request);
+    const headers: Record<string, string> = {
+      "Content-Type": "application/json",
+    };
+    if (authHeader) headers.Authorization = authHeader;
+
     const response = await fetch(
       `${NEXT_PUBLIC_API_URL}/cases/${id}/status-justification`,
       {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
+        headers,
         body: JSON.stringify(body),
       },
     );

@@ -2,6 +2,14 @@ import { NEXT_PUBLIC_API_URL } from "@/lib/utils";
 import { NextRequest, NextResponse } from "next/server";
 import type { CreateCaseDto, CreateCaseResponse } from "../types";
 
+function getAuthHeader(request: NextRequest): string | undefined {
+  const header = request.headers.get("authorization");
+  if (header) return header;
+  const accessToken = request.cookies.get("accessToken")?.value;
+  if (accessToken) return `Bearer ${accessToken}`;
+  return undefined;
+}
+
 export async function POST(request: NextRequest) {
   try {
     const body: CreateCaseDto = await request.json();
@@ -46,12 +54,17 @@ export async function POST(request: NextRequest) {
       hasApplicationData: !!body.applicationData,
     });
 
+    // Forward auth header if present
+    const authHeader = getAuthHeader(request);
+    const headers: Record<string, string> = {
+      "Content-Type": "application/json",
+    };
+    if (authHeader) headers.Authorization = authHeader;
+
     // Forward to backend API
     const backendResponse = await fetch(`${NEXT_PUBLIC_API_URL}/cases/create`, {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
+      headers,
       body: JSON.stringify(body),
     });
 

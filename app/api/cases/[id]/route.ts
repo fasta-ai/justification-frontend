@@ -1,5 +1,60 @@
 import { NextRequest, NextResponse } from "next/server";
 import { NEXT_PUBLIC_API_URL } from "@/lib/utils";
+import type { GetCasesResponse } from "../types";
+
+function getAuthHeader(request: NextRequest): string | undefined {
+  const header = request.headers.get("authorization");
+  if (header) return header;
+  const accessToken = request.cookies.get("accessToken")?.value;
+  if (accessToken) return `Bearer ${accessToken}`;
+  return undefined;
+}
+
+export async function GET(
+  request: NextRequest,
+  { params }: { params: Promise<{ id: string }> },
+) {
+  try {
+    const { id } = await params;
+
+    const authHeader = getAuthHeader(request);
+    const headers: Record<string, string> = {
+      "Content-Type": "application/json",
+    };
+    if (authHeader) headers.Authorization = authHeader;
+
+    const response = await fetch(`${NEXT_PUBLIC_API_URL}/cases/${id}`, {
+      method: "GET",
+      headers,
+    });
+
+    const data = await response.json().catch(() => ({}));
+
+    if (!response.ok) {
+      return NextResponse.json(
+        {
+          success: false,
+          error: data.message || "Failed to fetch case",
+        } as GetCasesResponse,
+        { status: response.status },
+      );
+    }
+
+    return NextResponse.json(
+      { success: true, cases: [data] } as GetCasesResponse,
+      { status: 200 },
+    );
+  } catch (error) {
+    return NextResponse.json(
+      {
+        success: false,
+        error:
+          error instanceof Error ? error.message : "Failed to fetch case",
+      } as GetCasesResponse,
+      { status: 500 },
+    );
+  }
+}
 
 export async function DELETE(
   request: NextRequest,
@@ -10,12 +65,16 @@ export async function DELETE(
 
     console.log(`Deleting case ${id}`);
 
+    const authHeader = getAuthHeader(request);
+    const headers: Record<string, string> = {
+      "Content-Type": "application/json",
+    };
+    if (authHeader) headers.Authorization = authHeader;
+
     // Forward request to NestJS backend
     const response = await fetch(`${NEXT_PUBLIC_API_URL}/cases/${id}`, {
       method: "DELETE",
-      headers: {
-        "Content-Type": "application/json",
-      },
+      headers,
     });
 
     console.log("Backend response status for delete:", response.status);
