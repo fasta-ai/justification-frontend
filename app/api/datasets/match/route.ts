@@ -1,49 +1,42 @@
 import { NEXT_PUBLIC_API_URL } from "@/lib/utils";
 import { NextRequest, NextResponse } from "next/server";
 
+function getAuthHeader(request: NextRequest): string | undefined {
+  const header = request.headers.get("Authorization") || request.headers.get("authorization");
+  if (header) return header;
+  const accessToken = request.cookies.get("accessToken")?.value;
+  if (accessToken) return `Bearer ${accessToken}`;
+  return undefined;
+}
+
+/**
+ * Proxy for the tiered similar-case endpoint on the NestJS backend.
+ * Body: { productName, modelNo?, brand?, elaborate?, category?, datasetName?, datasetType?, limit? }
+ * Returns: { tier, matches, stats } — see backend TieredMatchQueryDto.
+ */
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
 
-    // Extract the item data from request
-    const {
-      item,
-      srcField,
-      datasetName,
-      datasetType,
-      dstField,
-      descriptionField,
-    } = body;
-
-    if (!item || !srcField || !datasetName) {
+    if (!body?.productName) {
       return NextResponse.json(
-        { error: "Missing required fields: item, srcField, datasetName" },
+        { error: "Missing required field: productName" },
         { status: 400 },
       );
     }
 
-    // Get authorization from request headers
-    const authHeader = request.headers.get("Authorization") || "";
-    console.log("Auth Header:", authHeader);
+    const authHeader = getAuthHeader(request);
+    const endpoint = `${NEXT_PUBLIC_API_URL}/datasets/match`;
 
-    // Call the backend similar matches endpoint
-    const backendUrl = NEXT_PUBLIC_API_URL;
-    const endpoint = `${backendUrl}/datasets/match`;
+    const headers: Record<string, string> = {
+      "Content-Type": "application/json",
+    };
+    if (authHeader) headers.Authorization = authHeader;
 
     const response = await fetch(endpoint, {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: authHeader,
-      },
-      body: JSON.stringify({
-        item,
-        srcField,
-        datasetName,
-        datasetType,
-        dstField,
-        descriptionField,
-      }),
+      headers,
+      body: JSON.stringify(body),
     });
 
     if (!response.ok) {
@@ -55,21 +48,17 @@ export async function POST(request: NextRequest) {
     }
 
     const data = await response.json();
-
     return NextResponse.json(data);
   } catch (error) {
-    console.error("Similar matches API error:", error);
-
     if (error instanceof SyntaxError) {
       return NextResponse.json(
         { error: "Invalid JSON in request body" },
         { status: 400 },
       );
     }
-
     return NextResponse.json(
       {
-        error: "Failed to fetch similar matches",
+        error: "Failed to fetch tiered matches",
         message: error instanceof Error ? error.message : "Unknown error",
       },
       { status: 500 },

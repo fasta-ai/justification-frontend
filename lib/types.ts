@@ -52,6 +52,8 @@ export interface SimilarJustification {
   similarity: number;
   approvalStatus?: string;
   metadata?: any;
+  /** Which retrieval tier produced this match: exact token, pg_trgm fuzzy, or pgvector semantic. */
+  tier?: "exact" | "fuzzy" | "semantic";
 }
 
 export interface SimilarCaseAnalysis {
@@ -61,6 +63,32 @@ export interface SimilarCaseAnalysis {
   commonApprovalFactors: string[];
   commonRejectionFactors: string[];
   cases: SimilarJustification[];
+}
+
+export interface CaseAuditLogEntry {
+  id: string;
+  targetCaseId: string;
+  sourceDatasetId?: string;
+  userId?: string;
+  userEmail?: string;
+  userName?: string;
+  changedFields: ChangedField[];
+  createdAt: string;
+}
+
+export interface ChangedField {
+  section: ReplacementSection;
+  fieldName: string;
+  oldValue: any;
+  newValue: any;
+}
+
+export type ReplacementSection = "eg" | "application" | "catalogue";
+
+export interface FieldReplacement {
+  section: ReplacementSection;
+  fieldName: string;
+  value: any;
 }
 
 export type Stage = 1 | 2 | 3;

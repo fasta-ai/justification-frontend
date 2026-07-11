@@ -17,8 +17,8 @@ import {
   TrendingUp,
   TrendingDown,
   BarChart3,
-  Copy,
-  Check,
+  Info,
+  Replace,
   Edit,
   Trash2,
 } from "lucide-react";
@@ -71,12 +71,19 @@ import {
 } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
 import { useProductStore } from "@/lib/store";
-import { useSimilarMatches } from "@/hooks/use-similar-matches";
+import {
+  useSimilarMatches,
+  type SimilarMatch,
+} from "@/hooks/use-similar-matches";
 import { useGetCases } from "@/hooks/use-get-cases";
 import { useUpdateCaseStatus } from "@/hooks/use-update-case-status";
 import { useSaveCaseData } from "@/hooks/use-save-case-data";
 import { useDeleteCase } from "@/hooks/use-delete-case";
 import { useAuth } from "@/lib/auth-context";
+import { useReplaceFromSimilar } from "@/hooks/use-replace-from-similar";
+import { SimilarCaseReplaceDialog } from "@/components/similar-case-replace-dialog";
+import { CaseAuditLogDialog } from "@/components/case-audit-log-dialog";
+import { toast } from "sonner";
 import type {
   Product,
   SimilarJustification,
@@ -317,6 +324,19 @@ const catalogueFields = [
   "description",
 ];
 
+// Heuristic: render a field as a multi-line Textarea when its name suggests
+// free text, or its current value is long / already multi-line.
+const LONG_TEXT_NAME_RE =
+  /rem|remark|justif|elaborate|desc|reason|note|_jus$|jrem|rreject|reply|status|comment/i;
+
+function isLongTextField(field: string, value: unknown): boolean {
+  const str = value == null ? "" : String(value);
+  if (LONG_TEXT_NAME_RE.test(field)) return true;
+  if (str.length > 60) return true;
+  if (str.includes("\n")) return true;
+  return false;
+}
+
 export function Stage3Approval({ onBack, onComplete }: Stage3ApprovalProps) {
   const {
     products,
@@ -331,9 +351,11 @@ export function Stage3Approval({ onBack, onComplete }: Stage3ApprovalProps) {
   } = useProductStore();
 
   const {
-    matches,
+    matches: _matches,
+    tier: similarTier,
     loading: isLoadingSimilarMatches,
     fetchSimilarMatches,
+    clearMatches: clearSimilarMatches,
   } = useSimilarMatches();
 
   // Get current user
@@ -377,6 +399,7 @@ export function Stage3Approval({ onBack, onComplete }: Stage3ApprovalProps) {
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [editingCase, setEditingCase] = useState<EditingCase | null>(null);
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
+  const [isEditDirty, setIsEditDirty] = useState(false);
   const [egFormData, setEgFormData] = useState<Record<string, string>>({});
   const [appFormData, setAppFormData] = useState<Record<string, any>>({});
   const [catalogueFormData, setCatalogueFormData] = useState<
@@ -393,6 +416,13 @@ export function Stage3Approval({ onBack, onComplete }: Stage3ApprovalProps) {
   const [selectedSimilarCaseDetail, setSelectedSimilarCaseDetail] =
     useState<SimilarJustification | null>(null);
   const [isSimilarCaseModalOpen, setIsSimilarCaseModalOpen] = useState(false);
+  const [replaceSimilarCase, setReplaceSimilarCase] =
+    useState<SimilarJustification | null>(null);
+  const [isReplaceDialogOpen, setIsReplaceDialogOpen] = useState(false);
+  const [auditLogCase, setAuditLogCase] = useState<{
+    id: string;
+    caseNumber: string;
+  } | null>(null);
 
   const handleCopy = (id: string, text: string) => {
     navigator.clipboard.writeText(text);
@@ -411,6 +441,16 @@ export function Stage3Approval({ onBack, onComplete }: Stage3ApprovalProps) {
   const handleOpenSimilarCaseModal = (caseItem: SimilarJustification) => {
     setSelectedSimilarCaseDetail(caseItem);
     setIsSimilarCaseModalOpen(true);
+  };
+
+  const handleOpenReplaceDialog = (caseItem: SimilarJustification) => {
+    setReplaceSimilarCase(caseItem);
+    setIsReplaceDialogOpen(true);
+  };
+
+  const handleReplaceSuccess = async () => {
+    toast.success("Case updated from similar case");
+    await refetchCases();
   };
 
   const handleCopySelectedTemplates = () => {
@@ -495,6 +535,7 @@ export function Stage3Approval({ onBack, onComplete }: Stage3ApprovalProps) {
     });
 
     setActiveTab("eg");
+    setIsEditDirty(false);
     setIsEditModalOpen(true);
   };
 
@@ -543,6 +584,7 @@ export function Stage3Approval({ onBack, onComplete }: Stage3ApprovalProps) {
       );
 
       setIsEditModalOpen(false);
+      setIsEditDirty(false);
       setEditingCase(null);
       setEgFormData({});
       setAppFormData({});
@@ -557,10 +599,13 @@ export function Stage3Approval({ onBack, onComplete }: Stage3ApprovalProps) {
   // Clear similar cases data when product selection changes
   useEffect(() => {
     setSimilarCaseAnalysis(null);
+    setSimilarJustifications([]);
+    setSelectedSimilarCases([]);
     setGeneratedJustification("");
     setPendingDecision(null);
     setIsLoadingSimilarCases(false);
-  }, [selectedProducts.join(",")]); // Re-run when selected products change
+    clearSimilarMatches();
+  }, [selectedProducts.join(","), clearSimilarMatches]); // Re-run when selected products change
 
   const pendingProducts = products.filter((p) => p.status === "pending_review");
 
@@ -593,41 +638,49 @@ export function Stage3Approval({ onBack, onComplete }: Stage3ApprovalProps) {
 
       console.log("Selected case for similar matches:", selectedCase);
 
-      // Extract product information from catalogueData
-      const productInfo = selectedCase.catalogueData?.products?.[0];
-      const productName = productInfo?.product_name || "";
-      const description =
-        productInfo?.description ||
-        selectedCase.catalogueData?.description ||
+      // Extract application (PA_*) fields — the incoming application form.
+      const paPName = selectedCase.applicationData?.PA_PName || "";
+      const paModNo = selectedCase.applicationData?.PA_Mod_No || "";
+      const paBrand = selectedCase.applicationData?.PA_Brand || "";
+      const paElaborate =
+        selectedCase.applicationData?.PA_Elaborate ||
+        selectedCase.applicationData?.PA_Justify ||
         "";
-
-      // Extract category from applicationData
-      const category =
-        selectedCase.applicationData?.PA_Cat || selectedCase.categoryId || "";
+      // Extract EG-form fields to enrich the semantic query. The dataset rows
+      // are embedded as App_PName + catalogueDesc, so feeding the EG name/
+      // description pulls the query into the same neighbourhood as the case
+      // whose EG form we want to copy.
+      const eg = (selectedCase.egData || {}) as Record<string, string>;
+      const egName = eg.App_PName || eg.App_PNam_Mod || "";
+      const egDesc = eg.catalogueDesc || "";
 
       console.log("Searching for similar cases with:", {
-        productName,
-        category,
-        description: description.substring(0, 100) + "...",
+        paPName,
+        paModNo,
+        egName,
       });
 
-      // Call the similar matches API
-      await fetchSimilarMatches({
+      // Call the similar matches API and use the returned results directly.
+      // Reading the `matches` state here would be stale (it only updates on the
+      // next render), which previously caused the previous selection's results
+      // to be displayed.
+      const { matches: freshMatches } = await fetchSimilarMatches({
         item: {
-          PA_Cat: category,
-          desc: description,
+          PA_PName: paPName,
+          PA_Mod_No: paModNo,
+          PA_Brand: paBrand,
+          PA_Elaborate: paElaborate,
+          egName,
+          egDesc,
         },
-        srcField: "PA_Cat",
         datasetName: "Justification Creation",
         datasetType: "justification-data",
-        dstField: "PA_Cat",
-        descriptionField: "desc",
       });
 
-      console.log("Similar matches found:", matches);
+      console.log("Similar matches found:", freshMatches);
 
       // Transform API results to similar justifications format
-      const transformedCases: SimilarJustification[] = matches.map((match) => {
+      const transformedCases: SimilarJustification[] = freshMatches.map((match) => {
         const approvalStatus =
           match.approvalStatus ||
           match.metadata?.Q12a ||
@@ -648,6 +701,7 @@ export function Stage3Approval({ onBack, onComplete }: Stage3ApprovalProps) {
           similarity: match.similarity,
           approvalStatus: approvalStatus,
           metadata: match.metadata,
+          tier: match.tier,
         };
       });
 
@@ -684,62 +738,8 @@ export function Stage3Approval({ onBack, onComplete }: Stage3ApprovalProps) {
     selectedProducts,
     cases,
     fetchSimilarMatches,
-    matches?.length,
     setSimilarJustifications,
   ]);
-
-  useEffect(() => {
-    const transformedCases: SimilarJustification[] = matches.map((match) => {
-      const approvalStatus =
-        match.approvalStatus ||
-        match.metadata?.Q12a ||
-        match.metadata?.Q12a_T4 ||
-        "";
-      console.log("approvalStatus", approvalStatus);
-      const decision =
-        approvalStatus === "Yes" || approvalStatus === "Y"
-          ? ("approved" as const)
-          : ("rejected" as const);
-
-      return {
-        id: match.id,
-        productName: match.name,
-        category: match.category,
-        decision: decision,
-        justification: match.description || "Similar case found in dataset",
-        similarity: match.similarity,
-        approvalStatus: approvalStatus,
-        metadata: match.metadata,
-      };
-    });
-
-    setSimilarJustifications(transformedCases);
-
-    // Create case analysis summary
-    const approvedCount = transformedCases.filter(
-      (c) => c.decision === "approved",
-    ).length;
-    const analysis: SimilarCaseAnalysis = {
-      totalCases: transformedCases.length,
-      approvalRate: Math.round(
-        (approvedCount / Math.max(transformedCases.length, 1)) * 100,
-      ),
-      rejectionRate: Math.round(
-        ((transformedCases.length - approvedCount) /
-          Math.max(transformedCases.length, 1)) *
-          100,
-      ),
-      commonApprovalFactors: [
-        "Similar product categories found",
-        "Matching dataset records identified",
-        "Reference data available",
-      ],
-      commonRejectionFactors: [],
-      cases: transformedCases,
-    };
-
-    setSimilarCaseAnalysis(analysis);
-  }, [JSON.stringify(matches)]);
 
   const handleGenerateJustification = useCallback(
     async (decision: "approved" | "rejected") => {
@@ -760,50 +760,52 @@ export function Stage3Approval({ onBack, onComplete }: Stage3ApprovalProps) {
           if (!selectedCase) continue;
 
           // Extract product information from catalogueData
-          const productInfo = selectedCase.catalogueData?.products?.[0];
-          const productName = productInfo?.product_name || "";
-          const description =
-            productInfo?.description ||
-            selectedCase.catalogueData?.description ||
-            "";
-
-          // Extract category from applicationData
-          const category =
-            selectedCase.applicationData?.PA_Cat ||
-            selectedCase.categoryId ||
-            "";
+          // Extract PA_PName and PA_Mod_No from applicationData
+          const paPName = selectedCase.applicationData?.PA_PName || "";
+          const paModNo = selectedCase.applicationData?.PA_Mod_No || "";
+          const eg = (selectedCase.egData || {}) as Record<string, string>;
+          const egName = eg.App_PName || eg.App_PNam_Mod || "";
+          const egDesc = eg.catalogueDesc || "";
 
           console.log(
             `Generating justification for case ${selectedCase.caseNumber}:`,
             {
-              productName,
-              category,
+              paPName,
+              paModNo,
+              egName,
             },
           );
 
-          // Fetch similar matches for this case
+          // Fetch similar matches for this case. Use the returned value rather
+          // than the `matches` state, which is stale right after await.
+          let fetchedMatches: SimilarMatch[] = [];
           try {
-            await fetchSimilarMatches({
+            const result = await fetchSimilarMatches({
               item: {
-                PA_Cat: category,
-                desc: description,
+                PA_PName: paPName,
+                PA_Mod_No: paModNo,
+                PA_Brand: selectedCase.applicationData?.PA_Brand || "",
+                PA_Elaborate:
+                  selectedCase.applicationData?.PA_Elaborate ||
+                  selectedCase.applicationData?.PA_Justify ||
+                  "",
+                egName,
+                egDesc,
               },
-              srcField: "PA_Cat",
               datasetName: "Justification Creation",
               datasetType: "justification-data",
-              dstField: "PA_Cat",
-              descriptionField: "desc",
             });
+            fetchedMatches = result.matches;
           } catch (err) {
             console.error(
-              `Failed to fetch similar matches for ${productName}`,
+              `Failed to fetch similar matches for ${paPName}`,
               err,
             );
           }
 
           // Call justification API for this case
           const similarMatches =
-            matches
+            fetchedMatches
               ?.filter((c) => c.similarity > 0.5)
               .map((c) => ({
                 Justify: c.description || "Similar case found",
@@ -850,14 +852,14 @@ export function Stage3Approval({ onBack, onComplete }: Stage3ApprovalProps) {
             }
           } catch (error) {
             console.error(
-              `Error generating justification for ${productName}:`,
+              `Error generating justification for ${paPName}:`,
               error,
             );
             const mockProduct = {
               id: selectedCase.id,
-              name: productName,
+              name: paPName,
               sku: selectedCase.caseNumber,
-              category: category,
+              category: selectedCase.categoryId || "",
             } as Product;
             const justification = await generateJustification(
               [mockProduct],
@@ -877,7 +879,6 @@ export function Stage3Approval({ onBack, onComplete }: Stage3ApprovalProps) {
       selectedProducts,
       cases,
       fetchSimilarMatches,
-      matches,
       setIsGeneratingJustification,
       setSimilarJustifications,
     ],
@@ -1019,8 +1020,6 @@ export function Stage3Approval({ onBack, onComplete }: Stage3ApprovalProps) {
   const approvedCount = cases.filter((c) => c.status === "approved").length;
   const rejectedCount = cases.filter((c) => c.status === "rejected").length;
   const pendingCount = cases.filter((c) => c.status === "pending").length;
-
-  console.log("Matrches Fetched", matches);
 
   return (
     <div className="space-y-6">
@@ -1502,6 +1501,21 @@ export function Stage3Approval({ onBack, onComplete }: Stage3ApprovalProps) {
                                     size="icon"
                                     onClick={(e) => {
                                       e.stopPropagation();
+                                      setAuditLogCase({
+                                        id: caseItem.id,
+                                        caseNumber: caseItem.caseNumber,
+                                      });
+                                    }}
+                                    className="h-8 w-8"
+                                    title="Audit Log"
+                                  >
+                                    <History className="h-4 w-4" />
+                                  </Button>
+                                  <Button
+                                    variant="ghost"
+                                    size="icon"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
                                       handleEditCase(caseItem);
                                     }}
                                     className="h-8 w-8"
@@ -1638,6 +1652,21 @@ export function Stage3Approval({ onBack, onComplete }: Stage3ApprovalProps) {
                       </CardTitle>
                       <CardDescription className="text-xs">
                         {similarCaseAnalysis?.cases?.length} similar cases found
+                        {similarTier && similarTier !== "none" && (
+                          <>
+                            {" · retrieval tier: "}
+                            <span
+                              className={cn(
+                                "font-medium",
+                                similarTier === "exact" && "text-green-700",
+                                similarTier === "fuzzy" && "text-amber-700",
+                                similarTier === "semantic" && "text-slate-600",
+                              )}
+                            >
+                              {similarTier}
+                            </span>
+                          </>
+                        )}
                       </CardDescription>
                     </div>
                   </div>
@@ -1734,28 +1763,13 @@ export function Stage3Approval({ onBack, onComplete }: Stage3ApprovalProps) {
                     <div className="text-sm font-medium text-foreground">
                       Individual Cases
                     </div>
-                    {selectedSimilarCases.length > 0 && (
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={handleCopySelectedTemplates}
-                        className="gap-2 text-xs"
-                      >
-                        {copiedId === "templates" ? (
-                          <Check className="h-3 w-3 text-green-500" />
-                        ) : (
-                          <Copy className="h-3 w-3" />
-                        )}
-                        Copy Templates ({selectedSimilarCases.length})
-                      </Button>
-                    )}
                   </div>
                   <div className="space-y-2 max-h-64 overflow-y-auto pr-1">
                     {similarCaseAnalysis.cases.map((caseItem) => (
                       <div
                         key={caseItem.id}
                         className="p-3 rounded-lg border bg-card hover:bg-muted/50 transition-colors cursor-pointer"
-                        onClick={() => handleOpenSimilarCaseModal(caseItem)}
+                        onClick={() => handleOpenReplaceDialog(caseItem)}
                       >
                         <div className="flex items-center justify-between mb-1.5">
                           <div className="flex items-center gap-2">
@@ -1766,6 +1780,7 @@ export function Stage3Approval({ onBack, onComplete }: Stage3ApprovalProps) {
                               onCheckedChange={() =>
                                 handleToggleSimilarCase(caseItem.id)
                               }
+                              onClick={(e) => e.stopPropagation()}
                               className="h-4 w-4"
                             />
                             <span className="font-medium text-sm">
@@ -1777,21 +1792,40 @@ export function Stage3Approval({ onBack, onComplete }: Stage3ApprovalProps) {
                               className="h-6 w-6"
                               onClick={(e) => {
                                 e.stopPropagation();
-                                handleCopy(caseItem.id, caseItem.justification);
+                                handleOpenSimilarCaseModal(caseItem);
                               }}
-                              title="Copy Justification"
+                              title="View details"
                             >
-                              {copiedId === caseItem.id ? (
-                                <Check className="h-3 w-3 text-green-500" />
-                              ) : (
-                                <Copy className="h-3 w-3 text-muted-foreground" />
-                              )}
+                              <Info className="h-3.5 w-3.5 text-muted-foreground" />
                             </Button>
                           </div>
                           <div className="flex items-center gap-2">
                             <span className="text-xs text-muted-foreground">
                               {Math.round(caseItem.similarity * 100)}% match
                             </span>
+                            {caseItem.tier && (
+                              <Badge
+                                variant="outline"
+                                className={cn(
+                                  "text-xs",
+                                  caseItem.tier === "exact" &&
+                                    "bg-green-50 border-green-300 text-green-800",
+                                  caseItem.tier === "fuzzy" &&
+                                    "bg-amber-50 border-amber-300 text-amber-800",
+                                  caseItem.tier === "semantic" &&
+                                    "bg-slate-50 border-slate-300 text-slate-700",
+                                )}
+                                title={
+                                  caseItem.tier === "exact"
+                                    ? "All product-name tokens matched in the corpus"
+                                    : caseItem.tier === "fuzzy"
+                                      ? "Matched via trigram fuzzy similarity"
+                                      : "Matched via embedding similarity (weakest tier)"
+                                }
+                              >
+                                {caseItem.tier}
+                              </Badge>
+                            )}
                             <Badge
                               variant={
                                 caseItem.decision === "approved"
@@ -1955,7 +1989,8 @@ export function Stage3Approval({ onBack, onComplete }: Stage3ApprovalProps) {
                 {similarJustifications.map((similar) => (
                   <div
                     key={similar.id}
-                    className="p-3 rounded-lg border bg-card hover:bg-muted/50 transition-colors"
+                    className="p-3 rounded-lg border bg-card hover:bg-muted/50 transition-colors cursor-pointer"
+                    onClick={() => handleOpenReplaceDialog(similar)}
                   >
                     <div className="flex items-center justify-between mb-2">
                       <div className="flex items-center gap-2">
@@ -1966,16 +2001,13 @@ export function Stage3Approval({ onBack, onComplete }: Stage3ApprovalProps) {
                           variant="ghost"
                           size="icon"
                           className="h-6 w-6"
-                          onClick={() =>
-                            handleCopy(similar.id, similar.justification)
-                          }
-                          title="Copy Justification"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleOpenSimilarCaseModal(similar);
+                          }}
+                          title="View details"
                         >
-                          {copiedId === similar.id ? (
-                            <Check className="h-3 w-3 text-green-500" />
-                          ) : (
-                            <Copy className="h-3 w-3 text-muted-foreground" />
-                          )}
+                          <Info className="h-3.5 w-3.5 text-muted-foreground" />
                         </Button>
                       </div>
                       <Badge
@@ -2034,14 +2066,35 @@ export function Stage3Approval({ onBack, onComplete }: Stage3ApprovalProps) {
 
       {/* Edit Case Modal */}
       {editingCase && (
-        <Dialog open={isEditModalOpen} onOpenChange={setIsEditModalOpen}>
-          <DialogContent className="sm:max-w-[900px] max-h-[80vh] overflow-y-auto">
-            <DialogHeader>
-              <DialogTitle>Edit Case Details</DialogTitle>
+        <Dialog
+          open={isEditModalOpen}
+          onOpenChange={(open) => {
+            if (!open) {
+              if (
+                isEditDirty &&
+                !window.confirm("Discard unsaved changes?")
+              ) {
+                return;
+              }
+              setIsEditDirty(false);
+            }
+            setIsEditModalOpen(open);
+          }}
+        >
+          <DialogContent className="sm:max-w-[900px] max-h-[85vh] flex flex-col p-0 gap-0">
+            <DialogHeader className="px-6 pt-6 pb-3 border-b">
+              <div className="flex items-center justify-between gap-3">
+                <DialogTitle>Edit Case Details</DialogTitle>
+                {isEditDirty && (
+                  <span className="text-xs font-medium text-amber-600 bg-amber-50 border border-amber-200 rounded-full px-2.5 py-0.5">
+                    Unsaved changes
+                  </span>
+                )}
+              </div>
             </DialogHeader>
 
             {/* Custom Tabs */}
-            <div className="flex gap-2 border-b mb-4">
+            <div className="flex gap-2 border-b px-6">
               <button
                 onClick={() => setActiveTab("eg")}
                 className={cn(
@@ -2077,27 +2130,54 @@ export function Stage3Approval({ onBack, onComplete }: Stage3ApprovalProps) {
               </button>
             </div>
 
-            <div className="grid gap-4 py-4">
+            <div className="grid gap-4 py-4 px-6 overflow-y-auto flex-1">
               {/* EG Form Tab */}
               {activeTab === "eg" && (
                 <div className="border-t pt-4">
                   <div className="grid grid-cols-3 gap-3">
-                    {egFields.map((field) => (
-                      <div key={field} className="space-y-1">
-                        <Label className="text-xs">{field}</Label>
-                        <Input
-                          value={egFormData[field] || ""}
-                          onChange={(e) =>
-                            setEgFormData((prev) => ({
-                              ...prev,
-                              [field]: e.target.value,
-                            }))
-                          }
-                          className="text-sm"
-                          placeholder="/"
-                        />
-                      </div>
-                    ))}
+                    {egFields.map((field) => {
+                      const val = egFormData[field] || "";
+                      const long = isLongTextField(field, val);
+                      return (
+                        <div
+                          key={field}
+                          className={cn(
+                            "space-y-1",
+                            long && "col-span-3",
+                          )}
+                        >
+                          <Label className="text-xs">{field}</Label>
+                          {long ? (
+                            <Textarea
+                              value={val}
+                              onChange={(e) => {
+                                setIsEditDirty(true);
+                                setEgFormData((prev) => ({
+                                  ...prev,
+                                  [field]: e.target.value,
+                                }));
+                              }}
+                              className="text-sm"
+                              rows={3}
+                              placeholder="/"
+                            />
+                          ) : (
+                            <Input
+                              value={val}
+                              onChange={(e) => {
+                                setIsEditDirty(true);
+                                setEgFormData((prev) => ({
+                                  ...prev,
+                                  [field]: e.target.value,
+                                }));
+                              }}
+                              className="text-sm"
+                              placeholder="/"
+                            />
+                          )}
+                        </div>
+                      );
+                    })}
                   </div>
                 </div>
               )}
@@ -2106,36 +2186,47 @@ export function Stage3Approval({ onBack, onComplete }: Stage3ApprovalProps) {
               {activeTab === "application" && (
                 <div className="border-t pt-4">
                   <div className="grid grid-cols-2 gap-4">
-                    {appFields.map((field) => (
-                      <div key={field} className="space-y-2">
-                        <Label className="text-sm">{field}</Label>
-                        {field.includes("Elaborate") ||
-                        field.includes("Justify") ? (
-                          <Textarea
-                            value={appFormData[field] || ""}
-                            onChange={(e) =>
-                              setAppFormData((prev) => ({
-                                ...prev,
-                                [field]: e.target.value,
-                              }))
-                            }
-                            rows={2}
-                            placeholder="/"
-                          />
-                        ) : (
-                          <Input
-                            value={appFormData[field] || ""}
-                            onChange={(e) =>
-                              setAppFormData((prev) => ({
-                                ...prev,
-                                [field]: e.target.value,
-                              }))
-                            }
-                            placeholder="/"
-                          />
-                        )}
-                      </div>
-                    ))}
+                    {appFields.map((field) => {
+                      const val = appFormData[field] || "";
+                      const long = isLongTextField(field, val);
+                      return (
+                        <div
+                          key={field}
+                          className={cn(
+                            "space-y-2",
+                            long && "col-span-2",
+                          )}
+                        >
+                          <Label className="text-sm">{field}</Label>
+                          {long ? (
+                            <Textarea
+                              value={val}
+                              onChange={(e) => {
+                                setIsEditDirty(true);
+                                setAppFormData((prev) => ({
+                                  ...prev,
+                                  [field]: e.target.value,
+                                }));
+                              }}
+                              rows={3}
+                              placeholder="/"
+                            />
+                          ) : (
+                            <Input
+                              value={val}
+                              onChange={(e) => {
+                                setIsEditDirty(true);
+                                setAppFormData((prev) => ({
+                                  ...prev,
+                                  [field]: e.target.value,
+                                }));
+                              }}
+                              placeholder="/"
+                            />
+                          )}
+                        </div>
+                      );
+                    })}
                   </div>
                 </div>
               )}
@@ -2148,36 +2239,39 @@ export function Stage3Approval({ onBack, onComplete }: Stage3ApprovalProps) {
                       <Label>Product Name</Label>
                       <Input
                         value={catalogueFormData.product_name || ""}
-                        onChange={(e) =>
+                        onChange={(e) => {
+                          setIsEditDirty(true);
                           setCatalogueFormData((prev) => ({
                             ...prev,
                             product_name: e.target.value,
-                          }))
-                        }
+                          }));
+                        }}
                       />
                     </div>
                     <div className="space-y-2">
                       <Label>Model</Label>
                       <Input
                         value={catalogueFormData.model || ""}
-                        onChange={(e) =>
+                        onChange={(e) => {
+                          setIsEditDirty(true);
                           setCatalogueFormData((prev) => ({
                             ...prev,
                             model: e.target.value,
-                          }))
-                        }
+                          }));
+                        }}
                       />
                     </div>
                     <div className="space-y-2">
                       <Label>Product Size</Label>
                       <Input
                         value={catalogueFormData.product_size || ""}
-                        onChange={(e) =>
+                        onChange={(e) => {
+                          setIsEditDirty(true);
                           setCatalogueFormData((prev) => ({
                             ...prev,
                             product_size: e.target.value,
-                          }))
-                        }
+                          }));
+                        }}
                         placeholder="/"
                       />
                     </div>
@@ -2185,12 +2279,13 @@ export function Stage3Approval({ onBack, onComplete }: Stage3ApprovalProps) {
                       <Label>Usage Capacity</Label>
                       <Input
                         value={catalogueFormData.usage_capacity || ""}
-                        onChange={(e) =>
+                        onChange={(e) => {
+                          setIsEditDirty(true);
                           setCatalogueFormData((prev) => ({
                             ...prev,
                             usage_capacity: e.target.value,
-                          }))
-                        }
+                          }));
+                        }}
                         placeholder="/"
                       />
                     </div>
@@ -2198,12 +2293,13 @@ export function Stage3Approval({ onBack, onComplete }: Stage3ApprovalProps) {
                       <Label>Description</Label>
                       <Textarea
                         value={catalogueFormData.description || ""}
-                        onChange={(e) =>
+                        onChange={(e) => {
+                          setIsEditDirty(true);
                           setCatalogueFormData((prev) => ({
                             ...prev,
                             description: e.target.value,
-                          }))
-                        }
+                          }));
+                        }}
                         rows={3}
                       />
                     </div>
@@ -2212,18 +2308,52 @@ export function Stage3Approval({ onBack, onComplete }: Stage3ApprovalProps) {
               )}
             </div>
 
-            <DialogFooter>
+            <DialogFooter className="px-6 py-4 border-t bg-background">
               <Button
                 variant="outline"
-                onClick={() => setIsEditModalOpen(false)}
+                onClick={() => {
+                  if (
+                    isEditDirty &&
+                    !window.confirm("Discard unsaved changes?")
+                  ) {
+                    return;
+                  }
+                  setIsEditDirty(false);
+                  setIsEditModalOpen(false);
+                }}
               >
                 Cancel
               </Button>
-              <Button onClick={handleSaveEditedCase}>Save Changes</Button>
+              <Button onClick={handleSaveEditedCase} disabled={!isEditDirty}>
+                Save Changes
+              </Button>
             </DialogFooter>
           </DialogContent>
         </Dialog>
       )}
+
+      {/* Similar Case Replacement Dialog */}
+      <SimilarCaseReplaceDialog
+        open={isReplaceDialogOpen}
+        onOpenChange={setIsReplaceDialogOpen}
+        originalCase={
+          selectedProducts.length === 1
+            ? cases.find((c) => c.id === selectedProducts[0]) || null
+            : null
+        }
+        similarCase={replaceSimilarCase}
+        onSuccess={handleReplaceSuccess}
+      />
+
+      {/* Audit Log Dialog */}
+      <CaseAuditLogDialog
+        caseId={auditLogCase?.id ?? ""}
+        caseNumber={auditLogCase?.caseNumber ?? ""}
+        open={!!auditLogCase}
+        onOpenChange={(open) => {
+          if (!open) setAuditLogCase(null);
+        }}
+      />
 
       {/* Delete Case Confirmation Dialog */}
       <AlertDialog
@@ -2435,27 +2565,6 @@ export function Stage3Approval({ onBack, onComplete }: Stage3ApprovalProps) {
             <DialogFooter>
               <Button
                 variant="outline"
-                onClick={() => {
-                  handleCopy(
-                    selectedSimilarCaseDetail.id,
-                    selectedSimilarCaseDetail.justification,
-                  );
-                }}
-                className="gap-2"
-              >
-                {copiedId === selectedSimilarCaseDetail.id ? (
-                  <>
-                    <Check className="h-4 w-4 text-green-500" />
-                    Copied!
-                  </>
-                ) : (
-                  <>
-                    <Copy className="h-4 w-4" />
-                    Copy Justification
-                  </>
-                )}
-              </Button>
-              <Button
                 onClick={() => setIsSimilarCaseModalOpen(false)}
                 className="gap-2"
               >

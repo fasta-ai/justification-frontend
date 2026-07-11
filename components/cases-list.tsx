@@ -23,6 +23,7 @@ import {
 } from "@/components/ui/select";
 import { Search, RefreshCw, Loader2, FileText } from "lucide-react";
 import type { StatusType } from "@/app/api/cases/types";
+import { CaseAuditLogButton } from "@/components/case-audit-log-dialog";
 
 const statusColors: Record<StatusType, string> = {
   pending: "bg-yellow-100 text-yellow-800 border-yellow-300",
@@ -166,6 +167,7 @@ export function CasesList() {
                     <TableHead className="font-semibold">Category</TableHead>
                     <TableHead className="font-semibold">EG Received</TableHead>
                     <TableHead className="font-semibold">Created At</TableHead>
+                    <TableHead className="font-semibold text-right">Actions</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -200,6 +202,12 @@ export function CasesList() {
                               minute: '2-digit',
                             })
                           : "—"}
+                      </TableCell>
+                      <TableCell className="text-right">
+                        <CaseAuditLogButton
+                          caseId={caseItem.id}
+                          caseNumber={caseItem.caseNumber}
+                        />
                       </TableCell>
                     </TableRow>
                   ))}

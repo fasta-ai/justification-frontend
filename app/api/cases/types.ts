@@ -62,6 +62,52 @@ export interface UpdateCaseResponse {
   error?: string;
 }
 
+export type ReplacementSection = "eg" | "application" | "catalogue";
+
+export interface FieldReplacement {
+  section: ReplacementSection;
+  fieldName: string;
+  value: any;
+}
+
+export interface ReplaceFromSimilarDto {
+  sourceDatasetId: string;
+  replacements: FieldReplacement[];
+  actor?: {
+    userId?: string;
+    email?: string;
+    name?: string;
+  };
+}
+
+export interface ReplaceFromSimilarResponse {
+  success: boolean;
+  case?: Case;
+  error?: string;
+}
+
+export interface CaseAuditLogEntry {
+  id: string;
+  targetCaseId: string;
+  sourceDatasetId?: string;
+  userId?: string;
+  userEmail?: string;
+  userName?: string;
+  changedFields: Array<{
+    section: "eg" | "application" | "catalogue" | "case";
+    fieldName: string;
+    oldValue: any;
+    newValue: any;
+  }>;
+  createdAt: string;
+}
+
+export interface GetAuditLogsResponse {
+  success: boolean;
+  logs?: CaseAuditLogEntry[];
+  error?: string;
+}
+
 export interface SaveCaseDataDto {
   egData?: Record<string, any>;
   catalogueData?: Record<string, any>;
