@@ -13,7 +13,7 @@ export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
 
-    const { similar_matches, current_case, application_data, action } = body;
+    const { similar_matches, current_case, application_data, case_context, current_eg_remarks, action, case_id } = body;
 
     if (!current_case) {
       return NextResponse.json(
@@ -39,7 +39,10 @@ export async function POST(request: NextRequest) {
         similar_matches: similar_matches || [],
         current_case: current_case,
         application_data: application_data || {},
+        case_context: case_context || {},
+        current_eg_remarks: current_eg_remarks || "",
         action: action,
+        case_id: case_id,
       }),
     });
 

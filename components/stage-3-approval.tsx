@@ -82,6 +82,12 @@ import { useDeleteCase } from "@/hooks/use-delete-case";
 import { useAuth } from "@/lib/auth-context";
 import { useReplaceFromSimilar } from "@/hooks/use-replace-from-similar";
 import { SimilarCaseReplaceDialog } from "@/components/similar-case-replace-dialog";
+import {
+  JustificationModal,
+  type JustificationInputs,
+  type SaveDraftPayload,
+  type GenerateResult,
+} from "@/components/justification-modal";
 import { CaseAuditLogDialog } from "@/components/case-audit-log-dialog";
 import { toast } from "sonner";
 import type {
@@ -337,6 +343,98 @@ function isLongTextField(field: string, value: unknown): boolean {
   return false;
 }
 
+// Fields the justification prompt actually cites. Anything else in
+// applicationData is prompt bloat — dropped before sending to /api/suggest/justification.
+const JUSTIFICATION_APP_FIELDS = [
+  "PA_PName",
+  "PA_Brand",
+  "PA_Mod_No",
+  "PA_Cat",
+  "PA_RefL",
+  "PA_Elaborate",
+  "PA_Justify",
+  "TotAmtR",
+  "No_Bene",
+  "No_Elderly",
+  "No_Disable",
+  "Typ_Disability",
+  "Staff_Avail",
+  "Prof_Staff",
+  "Typ_Staff",
+] as const;
+
+const JUSTIFY_MAX_CHARS = 600;
+
+function trimApplicationForPrompt(
+  app: Record<string, unknown> | undefined,
+  overrides: Record<string, unknown> = {},
+): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const key of JUSTIFICATION_APP_FIELDS) {
+    const v = (app || {})[key];
+    if (v != null && v !== "") out[key] = v;
+  }
+  for (const [k, v] of Object.entries(overrides)) {
+    if (v != null && v !== "") out[k] = v;
+  }
+  return out;
+}
+
+// Cost + category + reviewer-note context pulled from the case's own egData
+// and catalogueData. Adds ~75 tokens but lets the prompt argue cost math and
+// reference-list matches concretely rather than abstractly.
+function buildCaseContextForPrompt(
+  eg: Record<string, unknown> | undefined,
+  catalogue: { description?: string } | undefined,
+): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  const pick = (k: string) => {
+    const v = (eg || {})[k];
+    if (v != null && v !== "") out[k] = v;
+  };
+  pick("Q12c_TotC"); // EG-accepted total cost
+  pick("Q12d_Quo"); // number of quotations
+  pick("Q12e_JCost"); // cost justification
+  pick("Q12g_JRem"); // J-Remarks — sibling of Q12b_Jus
+  if (catalogue?.description) out.catalogueDescription = catalogue.description;
+  return out;
+}
+
+function trimSimilarMatchesForPrompt<
+  T extends {
+    Justify?: string;
+    Prod_Name?: string;
+    Desc?: string;
+    Category?: string;
+    Cost?: string | number;
+    RejectReason?: string;
+    IsReferenceSeed?: boolean;
+    DatasetId?: string;
+  },
+>(matches: T[]): T[] {
+  return matches.map((m) => ({
+    ...m,
+    // The reference seed must be delivered UNTRIMMED so the model sees the
+    // full bullet/paragraph structure. Other matches stay capped for cost.
+    Justify:
+      m.IsReferenceSeed
+        ? m.Justify
+        : (m.Justify || "").length > JUSTIFY_MAX_CHARS
+          ? `${(m.Justify || "").slice(0, JUSTIFY_MAX_CHARS)}…`
+          : m.Justify,
+    Desc:
+      (m.Desc || "").length > 300
+        ? `${(m.Desc || "").slice(0, 300)}…`
+        : m.Desc,
+    RejectReason:
+      (m.RejectReason || "").length > 400
+        ? `${(m.RejectReason || "").slice(0, 400)}…`
+        : m.RejectReason,
+  }));
+}
+
+// JustificationEditor removed — replaced by JustificationModal + action panel.
+
 export function Stage3Approval({ onBack, onComplete }: Stage3ApprovalProps) {
   const {
     products,
@@ -379,9 +477,6 @@ export function Stage3Approval({ onBack, onComplete }: Stage3ApprovalProps) {
   // Delete case
   const { deleteCase, isLoading: isDeletingCase } = useDeleteCase();
 
-  console.log("Cases from API:", cases);
-  console.log("Products in Stage3Approval:", products);
-
   const [searchQuery, setSearchQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState<
     "all" | "pending" | "approved" | "rejected"
@@ -390,6 +485,7 @@ export function Stage3Approval({ onBack, onComplete }: Stage3ApprovalProps) {
   const [startDate, setStartDate] = useState<string>("");
   const [endDate, setEndDate] = useState<string>("");
   const [generatedJustification, setGeneratedJustification] = useState("");
+  const [generationVersion, setGenerationVersion] = useState(0);
   const [pendingDecision, setPendingDecision] = useState<
     "approved" | "rejected" | null
   >(null);
@@ -423,6 +519,30 @@ export function Stage3Approval({ onBack, onComplete }: Stage3ApprovalProps) {
     id: string;
     caseNumber: string;
   } | null>(null);
+
+  const [isSavingDraft, setIsSavingDraft] = useState(false);
+
+  // Justification modal state — drives the friendly per-decision workflow.
+  const [isJustificationModalOpen, setIsJustificationModalOpen] =
+    useState(false);
+  const [justificationModalDecision, setJustificationModalDecision] = useState<
+    "approved" | "rejected"
+  >("approved");
+  const [justificationModalSeed, setJustificationModalSeed] =
+    useState<SimilarJustification | null>(null);
+
+  const openJustificationModal = useCallback(
+    (
+      decision: "approved" | "rejected",
+      seed: SimilarJustification | null = null,
+    ) => {
+      setJustificationModalDecision(decision);
+      setJustificationModalSeed(seed);
+      setPendingDecision(decision);
+      setIsJustificationModalOpen(true);
+    },
+    [],
+  );
 
   const handleCopy = (id: string, text: string) => {
     navigator.clipboard.writeText(text);
@@ -619,6 +739,14 @@ export function Stage3Approval({ onBack, onComplete }: Stage3ApprovalProps) {
   const selectedProductObjects = products.filter((p) =>
     selectedProducts.includes(p.id),
   );
+  const selectedCase = cases.find((caseItem) => caseItem.id === selectedProducts[0]);
+
+  const handleSelectDecision = useCallback(
+    (decision: "approved" | "rejected") => {
+      setPendingDecision(decision);
+    },
+    [],
+  );
 
   const handleRetrieveSimilarCases = useCallback(async () => {
     if (selectedProducts.length === 0) return;
@@ -804,7 +932,7 @@ export function Stage3Approval({ onBack, onComplete }: Stage3ApprovalProps) {
           }
 
           // Call justification API for this case
-          const similarMatches =
+          const similarMatches = trimSimilarMatchesForPrompt(
             fetchedMatches
               ?.filter((c) => c.similarity > 0.5)
               .map((c) => ({
@@ -813,10 +941,18 @@ export function Stage3Approval({ onBack, onComplete }: Stage3ApprovalProps) {
                 Status: c.metadata?.Q12a || c.metadata?.Q12a_T4 || "",
                 Model_Code: c.metadata?.Model_Code || "",
                 Desc: c.metadata?.catalogueDesc || c.metadata?.RefL_Des || "",
-              })) || [];
+                Category: c.metadata?.PA_Cat || "",
+                Cost: c.metadata?.Q12c_TotC || "",
+                RejectReason: c.metadata?.Q12f_RReject || "",
+              })) || [],
+          );
 
           const currentCase = selectedCase.catalogueData?.products;
-          const appData = selectedCase.applicationData || {};
+          const appData = trimApplicationForPrompt(selectedCase.applicationData);
+          const caseContext = buildCaseContextForPrompt(
+            selectedCase.egData,
+            selectedCase.catalogueData,
+          );
 
           try {
             const response = await fetch("/api/suggest/justification", {
@@ -828,7 +964,10 @@ export function Stage3Approval({ onBack, onComplete }: Stage3ApprovalProps) {
                 similar_matches: similarMatches,
                 current_case: currentCase,
                 application_data: appData,
+                case_context: caseContext,
+                current_eg_remarks: selectedCase.egData?.Q12b_Jus || "",
                 action: decision,
+                case_id: selectedCase.id,
               }),
             });
 
@@ -871,6 +1010,7 @@ export function Stage3Approval({ onBack, onComplete }: Stage3ApprovalProps) {
 
         // Use justification from first case for display
         setGeneratedJustification(justifications[0] || "");
+        setGenerationVersion((version) => version + 1);
       } finally {
         setIsGeneratingJustification(false);
       }
@@ -884,112 +1024,336 @@ export function Stage3Approval({ onBack, onComplete }: Stage3ApprovalProps) {
     ],
   );
 
-  const handleConfirmDecision = useCallback(async () => {
-    if (!pendingDecision || !generatedJustification) return;
-
-    try {
+  // Generation entry point used by JustificationModal. Accepts caller-edited
+  // input fields plus an optional similar-case seed, calls the same
+  // /api/suggest/justification endpoint, and returns the produced string.
+  const generateJustificationWithInputs = useCallback(
+    async (
+      inputs: JustificationInputs,
+      decision: "approved" | "rejected",
+      seedSimilar?: SimilarJustification | null,
+    ): Promise<GenerateResult> => {
+      if (!selectedCase) return { text: "" };
       setIsGeneratingJustification(true);
-
-      console.log(
-        `Confirming ${pendingDecision} decision for ${selectedProducts.length} case(s)`,
-      );
-
-      // Update each selected case with status and justification
-      const updatePromises = selectedProducts.map(async (caseId) => {
-        const selectedCase = cases.find((c) => c.id === caseId);
-        if (!selectedCase) {
-          console.warn(`Case ${caseId} not found`);
-          return null;
+      try {
+        // Fetch similar matches using the (possibly edited) inputs so the AI
+        // context reflects what the user actually wants.
+        let fetchedMatches: SimilarMatch[] = [];
+        try {
+          const result = await fetchSimilarMatches({
+            item: {
+              PA_PName: inputs.PA_PName,
+              PA_Mod_No: inputs.PA_Mod_No,
+              PA_Brand: inputs.PA_Brand,
+              PA_Elaborate: inputs.PA_Elaborate,
+              egName: inputs.egName,
+              egDesc: inputs.egDesc,
+            },
+            datasetName: "Justification Creation",
+            datasetType: "justification-data",
+          });
+          fetchedMatches = result.matches;
+        } catch (err) {
+          console.error("Failed to fetch similar matches for modal", err);
         }
 
-        console.log(`Updating case ${selectedCase.caseNumber}:`, {
-          status: pendingDecision,
-          justification: generatedJustification.substring(0, 100) + "...",
+        const similarMatches = trimSimilarMatchesForPrompt(
+          (fetchedMatches
+            ?.filter((c) => c.similarity > 0.5)
+            .map((c) => ({
+              Justify: c.description || "Similar case found",
+              Prod_Name: c.name,
+              Status: c.metadata?.Q12a || c.metadata?.Q12a_T4 || "",
+              Model_Code: c.metadata?.Model_Code || "",
+              Desc: c.metadata?.catalogueDesc || c.metadata?.RefL_Des || "",
+              Category: c.metadata?.PA_Cat || "",
+              Cost: c.metadata?.Q12c_TotC || "",
+              RejectReason: c.metadata?.Q12f_RReject || "",
+            })) || []) as Array<{
+            Justify: string;
+            Prod_Name: string;
+            Status: string;
+            Model_Code: string;
+            Desc: string;
+            Category: string;
+            Cost: string;
+            RejectReason: string;
+            IsReferenceSeed?: boolean;
+            DatasetId?: string;
+          }>,
+        );
+
+        // Prepend the explicit seed similar case (if any) so it takes priority
+        // in the LLM prompt context. Flag it so the prompt knows to mirror its
+        // structure rather than paraphrase.
+        if (seedSimilar) {
+          similarMatches.unshift({
+            Justify: seedSimilar.justification || "Seed similar case",
+            Prod_Name: seedSimilar.productName,
+            Status: seedSimilar.approvalStatus || "",
+            Model_Code: seedSimilar.metadata?.Model_Code || "",
+            Desc: (
+              seedSimilar.metadata?.catalogueDesc ||
+              seedSimilar.metadata?.RefL_Des ||
+              ""
+            ).slice(0, 300),
+            Category: seedSimilar.metadata?.PA_Cat || "",
+            Cost: seedSimilar.metadata?.Q12c_TotC || "",
+            RejectReason: (seedSimilar.metadata?.Q12f_RReject || "").slice(
+              0,
+              400,
+            ),
+            IsReferenceSeed: true,
+            DatasetId: seedSimilar.id,
+          });
+        }
+
+        const currentCase = selectedCase.catalogueData?.products;
+        // Trim to prompt-relevant fields, then apply the user's edits from the
+        // modal so the AI reflects the modal inputs, not the raw case.
+        const appData = trimApplicationForPrompt(selectedCase.applicationData, {
+          PA_PName: inputs.PA_PName,
+          PA_Brand: inputs.PA_Brand,
+          PA_Mod_No: inputs.PA_Mod_No,
+          PA_Elaborate: inputs.PA_Elaborate,
+        });
+        const caseContext = buildCaseContextForPrompt(
+          selectedCase.egData,
+          selectedCase.catalogueData,
+        );
+
+        try {
+          const response = await fetch("/api/suggest/justification", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              similar_matches: similarMatches,
+              current_case: currentCase,
+              application_data: appData,
+              case_context: caseContext,
+              current_eg_remarks: inputs.Q12b_Jus || "",
+              action: decision,
+              case_id: selectedCase.id,
+            }),
+          });
+          if (response.ok) {
+            const result = await response.json();
+            return {
+              text: result?.data?.justification || "",
+              aiDecision: result?.data?.decision,
+              aiReasoning: result?.data?.reasoning,
+            };
+          }
+        } catch (error) {
+          console.error("Error generating justification (modal):", error);
+        }
+        return { text: "" };
+      } finally {
+        setIsGeneratingJustification(false);
+      }
+    },
+    [
+      selectedCase,
+      fetchSimilarMatches,
+      setIsGeneratingJustification,
+    ],
+  );
+
+  const handleConfirmDecision = useCallback(
+    async (justification: string, explicitDecision?: "approved" | "rejected") => {
+      const decision = explicitDecision ?? pendingDecision;
+      if (!decision || !justification.trim()) return;
+
+      try {
+        setIsGeneratingJustification(true);
+
+        console.log(
+          `Confirming ${decision} decision for ${selectedProducts.length} case(s)`,
+        );
+
+        // Update each selected case with status and justification
+        const updatePromises = selectedProducts.map(async (caseId) => {
+          const selectedCase = cases.find((c) => c.id === caseId);
+          if (!selectedCase) {
+            console.warn(`Case ${caseId} not found`);
+            return null;
+          }
+
+          console.log(`Updating case ${selectedCase.caseNumber}:`, {
+            status: decision,
+            justification: justification.substring(0, 100) + "...",
+          });
+
+          // Mirror the justification into egData.Q12b_Jus so downstream
+          // Copy / Edit views see the same text the reviewer confirmed.
+          // Fire in parallel with the status update — status endpoint owns
+          // the case.justification field; save endpoint owns egData.
+          const mergedEg = {
+            ...(selectedCase.egData || {}),
+            Q12b_Jus: justification,
+          };
+          const [, statusResult] = await Promise.all([
+            saveCaseData(caseId, { egData: mergedEg }).catch((err) => {
+              console.error(`egData write failed for ${caseId}`, err);
+              return { success: false } as const;
+            }),
+            updateCaseStatus(caseId, {
+              status: decision,
+              justification: justification,
+            }),
+          ]);
+          return statusResult;
         });
 
-        return updateCaseStatus(caseId, {
-          status: pendingDecision,
-          justification: generatedJustification,
+        const results = await Promise.all(updatePromises);
+
+        // Check for failures
+        const failedUpdates = results.filter((r) => !r || !r.success);
+
+        if (failedUpdates.length > 0) {
+          // Fallback: Update local state if API failed
+          setCases((currentCases) =>
+            currentCases.map((c) =>
+              selectedProducts.includes(c.id)
+                ? {
+                    ...c,
+                    status: decision,
+                    justification: justification,
+                  }
+                : c,
+            ),
+          );
+
+          alert(
+            `Warning: ${failedUpdates.length} case(s) failed to save to server, but updated locally.`,
+          );
+        } else {
+          console.log(
+            `Successfully updated ${results.length} case(s) with ${decision} status`,
+          );
+          toast.success(
+            `Successfully ${decision} ${results.length} case(s) with the provided justification.`,
+          );
+          // Refresh cases list to ensure sync with server
+          await refetchCases();
+        }
+
+        // Also update local product statuses for backward compatibility
+        selectedProducts.forEach((id) => {
+          updateProduct(id, { status: decision });
         });
-      });
+      } catch (error) {
+        console.error("Error confirming decision:", error);
 
-      const results = await Promise.all(updatePromises);
-
-      // Check for failures
-      const failedUpdates = results.filter((r) => !r || !r.success);
-
-      if (failedUpdates.length > 0) {
-        // Fallback: Update local state if API failed
+        // Fallback: Update local state on error
         setCases((currentCases) =>
           currentCases.map((c) =>
             selectedProducts.includes(c.id)
               ? {
                   ...c,
-                  status: pendingDecision,
-                  justification: generatedJustification,
+                  status: decision,
+                  justification: justification,
                 }
               : c,
           ),
         );
 
-        alert(
-          `Warning: ${failedUpdates.length} case(s) failed to save to server, but updated locally.`,
-        );
-      } else {
-        console.log(
-          `Successfully updated ${results.length} case(s) with ${pendingDecision} status`,
-        );
-        alert(
-          `Successfully ${pendingDecision} ${results.length} case(s) with AI-generated justification.`,
-        );
-        // Refresh cases list to ensure sync with server
-        await refetchCases();
+        alert("Error reaching server. Table updated locally.");
+      } finally {
+        setIsGeneratingJustification(false);
+
+        // Close modal and clear state
+        setIsJustificationModalOpen(false);
+        setJustificationModalSeed(null);
+        clearSelection();
+        setGeneratedJustification("");
+        setSimilarJustifications([]);
+        setPendingDecision(null);
+        setSimilarCaseAnalysis(null);
       }
+    },
+    [
+      pendingDecision,
+      selectedProducts,
+      cases,
+      setCases,
+      updateCaseStatus,
+      saveCaseData,
+      refetchCases,
+      updateProduct,
+      clearSelection,
+      setSimilarJustifications,
+      setIsGeneratingJustification,
+    ],
+  );
 
-      // Also update local product statuses for backward compatibility
-      selectedProducts.forEach((id) => {
-        updateProduct(id, { status: pendingDecision });
-      });
-    } catch (error) {
-      console.error("Error confirming decision:", error);
+  const handleSaveJustificationDraft = useCallback(
+    async (payload: SaveDraftPayload) => {
+      if (!selectedCase) return;
+      const caseId = selectedCase.id;
+      setIsSavingDraft(true);
+      try {
+        // Merge current egData with the incoming patch, then force Q12b_Jus
+        // to the payload value — the modal only opens this handler AFTER the
+        // reviewer confirmed the override dialog, so we intentionally
+        // overwrite whatever was stored. egPatch still carries the other
+        // eg-form edits (name, description) so those flow through untouched.
+        const mergedEg = {
+          ...(selectedCase.egData || {}),
+          ...payload.egPatch,
+          Q12b_Jus: payload.q12bJus,
+        };
+        const hasAppPatch = Object.keys(payload.applicationPatch).length > 0;
+        const saveDto: SaveCaseDataDto = { egData: mergedEg };
+        if (hasAppPatch) {
+          saveDto.applicationData = {
+            ...(selectedCase.applicationData || {}),
+            ...payload.applicationPatch,
+          };
+        }
 
-      // Fallback: Update local state on error
-      setCases((currentCases) =>
-        currentCases.map((c) =>
-          selectedProducts.includes(c.id)
-            ? {
-                ...c,
-                status: pendingDecision,
-                justification: generatedJustification,
-              }
-            : c,
-        ),
-      );
+        // Fire both writes in parallel — status is intentionally omitted so
+        // the case stays in its current lifecycle state.
+        const [saveResult, statusResult] = await Promise.all([
+          saveCaseData(caseId, saveDto),
+          updateCaseStatus(caseId, { justification: payload.justification }),
+        ]);
 
-      alert("Error reaching server. Table updated locally.");
-    } finally {
-      setIsGeneratingJustification(false);
+        const saveOk = saveResult?.success !== false;
+        const statusOk = statusResult?.success !== false;
 
-      // Clear state
-      clearSelection();
-      setGeneratedJustification("");
-      setSimilarJustifications([]);
-      setPendingDecision(null);
-      setSimilarCaseAnalysis(null);
-    }
-  }, [
-    pendingDecision,
-    generatedJustification,
-    selectedProducts,
-    cases,
-    setCases,
-    updateCaseStatus,
-    refetchCases,
-    updateProduct,
-    clearSelection,
-    setSimilarJustifications,
-    setIsGeneratingJustification,
-  ]);
+        if (!saveOk || !statusOk) {
+          // Fallback to local update so the reviewer's work isn't lost.
+          setCases((currentCases) =>
+            currentCases.map((c) =>
+              c.id === caseId
+                ? {
+                    ...c,
+                    egData: mergedEg,
+                    ...(hasAppPatch && {
+                      applicationData: saveDto.applicationData,
+                    }),
+                    justification: payload.justification,
+                  }
+                : c,
+            ),
+          );
+          toast.error("Draft saved locally — server update failed.");
+        } else {
+          toast.success("Draft saved.");
+          await refetchCases();
+        }
+        setIsJustificationModalOpen(false);
+        setJustificationModalSeed(null);
+      } catch (err) {
+        console.error("Error saving justification draft:", err);
+        toast.error("Failed to save draft. Please retry.");
+      } finally {
+        setIsSavingDraft(false);
+      }
+    },
+    [selectedCase, saveCaseData, updateCaseStatus, refetchCases, setCases],
+  );
 
   const handleSelectAll = useCallback(() => {
     if (selectedProducts.length === filteredProducts.length) {
@@ -1029,7 +1393,7 @@ export function Stage3Approval({ onBack, onComplete }: Stage3ApprovalProps) {
             Approval Workflow
           </h2>
           <p className="text-muted-foreground mt-1">
-            Select products and submit for AI-assisted approval decisions
+            Select a case to review its justification and make a decision
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -1561,50 +1925,14 @@ export function Stage3Approval({ onBack, onComplete }: Stage3ApprovalProps) {
             </CardContent>
           </Card>
 
-          {selectedProducts.length > 0 && (
-            <div className="mt-4 p-4 bg-muted/50 rounded-lg">
-              <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
-                <div>
-                  <p className="font-medium">
-                    {selectedProducts.length} product(s) selected
-                  </p>
-                  <p className="text-sm text-muted-foreground">
-                    Choose an action to generate AI justification
-                  </p>
-                </div>
-                <div className="flex items-center gap-2">
-                  <Button
-                    variant="outline"
-                    onClick={handleRetrieveSimilarCases}
-                    disabled={isLoadingSimilarCases || isLoadingSimilarMatches}
-                    className="gap-2 bg-transparent"
-                  >
-                    {isLoadingSimilarCases || isLoadingSimilarMatches ? (
-                      <Loader2 className="w-4 h-4 animate-spin" />
-                    ) : (
-                      <History className="w-4 h-4" />
-                    )}
-                    Similar Cases
-                  </Button>
-                  <Button
-                    variant="outline"
-                    onClick={() => handleGenerateJustification("rejected")}
-                    disabled={isGeneratingJustification}
-                    className="gap-2 border-destructive/50 text-destructive hover:bg-destructive hover:text-destructive-foreground"
-                  >
-                    <XCircle className="w-4 h-4" />
-                    Reject
-                  </Button>
-                  <Button
-                    onClick={() => handleGenerateJustification("approved")}
-                    disabled={isGeneratingJustification}
-                    className="gap-2 bg-success hover:bg-success/90 text-success-foreground"
-                  >
-                    <CheckCircle2 className="w-4 h-4" />
-                    Approve
-                  </Button>
-                </div>
-              </div>
+          {selectedCase && (
+            <div className="mt-4 rounded-lg bg-muted/50 px-4 py-3">
+              <p className="text-sm font-medium">
+                Selected case: {selectedCase.caseNumber}
+              </p>
+              <p className="text-xs text-muted-foreground">
+                Review and decide this case in the justification panel.
+              </p>
             </div>
           )}
           {/* </CardContent>
@@ -1768,8 +2096,7 @@ export function Stage3Approval({ onBack, onComplete }: Stage3ApprovalProps) {
                     {similarCaseAnalysis.cases.map((caseItem) => (
                       <div
                         key={caseItem.id}
-                        className="p-3 rounded-lg border bg-card hover:bg-muted/50 transition-colors cursor-pointer"
-                        onClick={() => handleOpenReplaceDialog(caseItem)}
+                        className="p-3 rounded-lg border bg-card transition-colors"
                       >
                         <div className="flex items-center justify-between mb-1.5">
                           <div className="flex items-center gap-2">
@@ -1853,15 +2180,46 @@ export function Stage3Approval({ onBack, onComplete }: Stage3ApprovalProps) {
                         <p className="text-xs text-muted-foreground">
                           {caseItem.justification}
                         </p>
-                        <Badge variant="outline" className="text-xs mt-2">
-                          {caseItem.category}
-                        </Badge>
-                        <Badge variant="outline" className="text-xs mt-2 ml-1">
-                          {caseItem.metadata.Tranche}
-                        </Badge>
-                        <Badge variant="outline" className="text-xs mt-2 ml-1">
-                          {caseItem.metadata.fid}
-                        </Badge>
+                        <div className="flex items-center justify-between mt-2 gap-2 flex-wrap">
+                          <div className="flex items-center gap-1 flex-wrap">
+                            <Badge variant="outline" className="text-xs">
+                              {caseItem.category}
+                            </Badge>
+                            <Badge variant="outline" className="text-xs">
+                              {caseItem.metadata.Tranche}
+                            </Badge>
+                            <Badge variant="outline" className="text-xs">
+                              {caseItem.metadata.fid}
+                            </Badge>
+                          </div>
+                          <div className="flex items-center gap-1">
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              className="h-7 px-2 gap-1"
+                              onClick={() => handleOpenReplaceDialog(caseItem)}
+                              title="Copy fields from this case into the current case"
+                            >
+                              <Replace className="h-3.5 w-3.5" />
+                              Copy
+                            </Button>
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              className="h-7 px-2 gap-1"
+                              onClick={() =>
+                                openJustificationModal(
+                                  caseItem.decision,
+                                  caseItem,
+                                )
+                              }
+                              title="Open justification workspace seeded with this case"
+                            >
+                              <Sparkles className="h-3.5 w-3.5" />
+                              Justification
+                            </Button>
+                          </div>
+                        </div>
                       </div>
                     ))}
                   </div>
@@ -1871,97 +2229,92 @@ export function Stage3Approval({ onBack, onComplete }: Stage3ApprovalProps) {
           )}
         </div>
 
-        {/* AI Justification Panel */}
+        {/* Justification and Decision Panel */}
         <div className="space-y-4">
           <Card>
             <CardHeader className="pb-3">
               <div className="flex items-center gap-2">
                 <div className="w-8 h-8 rounded-lg bg-primary/10 flex items-center justify-center">
-                  <Sparkles className="w-4 h-4 text-primary" />
+                  <FileText className="w-4 h-4 text-primary" />
                 </div>
                 <div>
-                  <CardTitle className="text-base">AI Justification</CardTitle>
+                  <CardTitle className="text-base">Justification</CardTitle>
                   <CardDescription className="text-xs">
-                    Generated reasoning for decision
+                    Edit existing text, write manually, or generate with AI
                   </CardDescription>
                 </div>
               </div>
             </CardHeader>
             <CardContent>
-              {selectedProducts.length > 0 ? (
-                <>
-                  {isGeneratingJustification && (
-                    <div className="flex items-center gap-2 py-2 mb-3">
-                      <Loader2 className="w-4 h-4 animate-spin text-primary" />
-                      <p className="text-sm text-muted-foreground">
-                        Generating justification...
-                      </p>
+              {selectedCase ? (
+                <div className="space-y-4">
+                  <div className="rounded-lg border bg-muted/30 p-3">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <div>
+                        <p className="text-sm font-medium">
+                          Case {selectedCase.caseNumber}
+                        </p>
+                        <p className="text-xs text-muted-foreground">
+                          {selectedCase.justification?.trim()
+                            ? "Existing justification saved for this case."
+                            : "No justification saved yet."}
+                        </p>
+                      </div>
+                      <Badge variant="outline" className="capitalize">
+                        {selectedCase.status.replace("_", " ")}
+                      </Badge>
                     </div>
-                  )}
-
-                  <div className="space-y-4">
-                    {pendingDecision && (
-                      <div
-                        className={cn(
-                          "flex items-center gap-2 p-2 rounded-lg",
-                          pendingDecision === "approved"
-                            ? "bg-success/10 text-success"
-                            : "bg-destructive/10 text-destructive",
-                        )}
-                      >
-                        {pendingDecision === "approved" ? (
-                          <ThumbsUp className="w-4 h-4" />
-                        ) : (
-                          <ThumbsDown className="w-4 h-4" />
-                        )}
-                        <span className="font-medium text-sm capitalize">
-                          {pendingDecision} Decision
-                        </span>
-                      </div>
-                    )}
-
-                    <Textarea
-                      placeholder="Enter your justification here or use AI to generate one..."
-                      value={generatedJustification}
-                      onChange={(e) =>
-                        setGeneratedJustification(e.target.value)
-                      }
-                      rows={16}
-                      className="text-sm min-h-[300px]"
-                    />
-
-                    {pendingDecision && generatedJustification && (
-                      <div className="flex items-center gap-2">
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          onClick={() =>
-                            handleGenerateJustification(pendingDecision!)
-                          }
-                          className="gap-1"
-                        >
-                          <RefreshCw className="w-3 h-3" />
-                          Regenerate
-                        </Button>
-                        <Button
-                          size="sm"
-                          onClick={handleConfirmDecision}
-                          className={cn(
-                            "flex-1 gap-1",
-                            pendingDecision === "approved"
-                              ? "bg-success hover:bg-success/90 text-success-foreground"
-                              : "bg-destructive hover:bg-destructive/90",
-                          )}
-                        >
-                          Confirm{" "}
-                          {pendingDecision === "approved"
-                            ? "Approval"
-                            : "Rejection"}
-                        </Button>
-                      </div>
-                    )}
                   </div>
-                </>
+
+                  <p className="text-sm text-muted-foreground">
+                    Choose an action to proceed.
+                  </p>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                    <Button
+                      type="button"
+                      variant="outline"
+                      onClick={handleRetrieveSimilarCases}
+                      disabled={
+                        isLoadingSimilarCases || isLoadingSimilarMatches
+                      }
+                      className="gap-2"
+                    >
+                      {isLoadingSimilarCases || isLoadingSimilarMatches ? (
+                        <Loader2 className="w-4 h-4 animate-spin" />
+                      ) : (
+                        <History className="w-4 h-4" />
+                      )}
+                      Similar Cases
+                    </Button>
+                    <Button
+                      type="button"
+                      onClick={() => openJustificationModal("approved")}
+                      disabled={isUpdatingCase || isGeneratingJustification}
+                      className="gap-2 bg-success hover:bg-success/90 text-success-foreground"
+                    >
+                      <CheckCircle2 className="w-4 h-4" />
+                      Approve
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="destructive"
+                      onClick={() => openJustificationModal("rejected")}
+                      disabled={isUpdatingCase || isGeneratingJustification}
+                      className="gap-2"
+                    >
+                      <XCircle className="w-4 h-4" />
+                      Reject
+                    </Button>
+                  </div>
+
+                  <p className="text-xs text-muted-foreground">
+                    Approve or Reject opens the justification workspace where
+                    you can review inputs, generate with AI, edit, and confirm.
+                    Similar Cases loads matching records with Copy and
+                    Justification actions on each row.
+                  </p>
+                </div>
               ) : (
                 <div className="text-center py-8 text-muted-foreground">
                   <FileText className="w-8 h-8 mx-auto mb-3 opacity-50" />
@@ -2343,6 +2696,26 @@ export function Stage3Approval({ onBack, onComplete }: Stage3ApprovalProps) {
         }
         similarCase={replaceSimilarCase}
         onSuccess={handleReplaceSuccess}
+      />
+
+      {/* Justification Modal — friendly per-decision workspace */}
+      <JustificationModal
+        open={isJustificationModalOpen}
+        onOpenChange={(open) => {
+          setIsJustificationModalOpen(open);
+          if (!open) {
+            setJustificationModalSeed(null);
+          }
+        }}
+        selectedCase={selectedCase || null}
+        initialDecision={justificationModalDecision}
+        seedSimilarCase={justificationModalSeed}
+        isGenerating={isGeneratingJustification}
+        isUpdating={isUpdatingCase}
+        isSavingDraft={isSavingDraft}
+        onGenerate={generateJustificationWithInputs}
+        onConfirm={handleConfirmDecision}
+        onSaveDraft={handleSaveJustificationDraft}
       />
 
       {/* Audit Log Dialog */}

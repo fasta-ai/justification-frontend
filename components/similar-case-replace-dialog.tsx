@@ -21,6 +21,7 @@ import { Badge } from "@/components/ui/badge";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Separator } from "@/components/ui/separator";
+import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/lib/auth-context";
 import { useReplaceFromSimilar } from "@/hooks/use-replace-from-similar";
@@ -106,6 +107,12 @@ const sectionLabels: Record<ReplacementSection, string> = {
 function formatValue(value: any): string {
   if (value === null || value === undefined || value === "") return "—";
   if (typeof value === "object") return JSON.stringify(value);
+  return String(value);
+}
+
+function toEditString(value: any): string {
+  if (value === null || value === undefined) return "";
+  if (typeof value === "object") return JSON.stringify(value, null, 2);
   return String(value);
 }
 
@@ -219,6 +226,21 @@ export function SimilarCaseReplaceDialog({
               : r,
           )
         : [...prev, { section, fieldName, value }],
+    );
+  }
+
+  function handleEditValue(
+    section: ReplacementSection,
+    fieldName: string,
+    value: string,
+  ) {
+    setReplacements((prev) =>
+      prev.map((replacement) =>
+        replacement.section === section &&
+        replacement.fieldName === fieldName
+          ? { ...replacement, value }
+          : replacement,
+      ),
     );
   }
 
@@ -405,14 +427,30 @@ export function SimilarCaseReplaceDialog({
               </Button>
             )}
           </div>
-          <div
-            className={cn(
-              "break-words",
-              copied && "text-primary font-medium",
-            )}
-          >
-            {formatValue(displayValue)}
-          </div>
+          {copied ? (
+            <Textarea
+              value={toEditString(displayValue)}
+              onChange={(e) =>
+                handleEditValue(section, fieldName, e.target.value)
+              }
+              className="min-h-[60px] text-sm resize-y mt-1"
+            />
+          ) : (
+            <div
+              className="break-words cursor-pointer hover:bg-accent/50 rounded-sm -mx-1 px-1 -my-0.5 py-0.5 transition-colors"
+              onClick={() => handleUseValue(section, fieldName, displayValue)}
+              role="button"
+              tabIndex={0}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" || e.key === " ") {
+                  e.preventDefault();
+                  handleUseValue(section, fieldName, displayValue);
+                }
+              }}
+            >
+              {formatValue(displayValue)}
+            </div>
+          )}
         </div>
       </div>
     );
