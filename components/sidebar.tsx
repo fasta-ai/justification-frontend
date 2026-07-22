@@ -11,6 +11,7 @@ import {
   CheckCircle,
   FileText,
   FileCheck,
+  Users,
 } from "lucide-react";
 import Image from "next/image";
 import Link from "next/link";
@@ -53,7 +54,20 @@ export function Sidebar({ mobileMenuOpen, setMobileMenuOpen }: SidebarProps) {
           >
             <LayoutDashboard className="w-5 h-5" />
           </Link>
-          
+
+          <Link
+            href="/staff"
+            title="Staff Directory"
+            aria-current={pathname === "/staff" ? "page" : undefined}
+            className={`p-3 rounded-lg transition-colors ${
+              pathname === "/staff"
+                ? "bg-primary text-primary-foreground"
+                : "hover:bg-accent text-foreground"
+            }`}
+          >
+            <Users className="w-5 h-5" />
+          </Link>
+
           {/* <Link
             href="/cases"
             title="All Cases"
@@ -151,19 +165,33 @@ export function Sidebar({ mobileMenuOpen, setMobileMenuOpen }: SidebarProps) {
                 <LayoutDashboard className="w-4 h-4" />
                 Dashboard
               </Link>
-              
-              <Link 
+
+              <Link
+                href="/staff"
+                aria-current={pathname === "/staff" ? "page" : undefined}
+                className={`w-full flex items-center gap-3 px-4 py-2 rounded-lg text-sm font-medium ${
+                  pathname === "/staff"
+                    ? "bg-primary text-primary-foreground"
+                    : "hover:bg-accent text-foreground"
+                }`}
+                onClick={() => setMobileMenuOpen(false)}
+              >
+                <Users className="w-4 h-4" />
+                Staff Directory
+              </Link>
+
+              {/* <Link
                 href="/cases"
                 className={`w-full flex items-center gap-3 px-4 py-2 rounded-lg text-sm font-medium ${
-                  pathname === "/cases" 
-                    ? "bg-primary text-primary-foreground" 
+                  pathname === "/cases"
+                    ? "bg-primary text-primary-foreground"
                     : "hover:bg-accent text-foreground"
                 }`}
                 onClick={() => setMobileMenuOpen(false)}
               >
                 <FileText className="w-4 h-4" />
                 All Cases
-              </Link>
+              </Link> */}
               
               {/* Quick Navigation Section */}
               {/* <div className="pt-4 mt-4 border-t space-y-2">
