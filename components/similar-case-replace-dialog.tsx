@@ -22,6 +22,12 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Separator } from "@/components/ui/separator";
 import { Textarea } from "@/components/ui/textarea";
+import { StaffSelect } from "@/components/staff-select";
+import {
+  Q12aSelect,
+  Q12fRejectSelect,
+  normalizeNaLike,
+} from "@/components/eg-field-select";
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/lib/auth-context";
 import { useReplaceFromSimilar } from "@/hooks/use-replace-from-similar";
@@ -32,6 +38,10 @@ import type {
   FieldReplacement,
   ReplacementSection,
 } from "@/lib/types";
+import {
+  resolveSourceValue,
+  resolveTargetSlot,
+} from "@/lib/case-field-mapping";
 
 interface SimilarCaseReplaceDialogProps {
   open: boolean;
@@ -41,10 +51,14 @@ interface SimilarCaseReplaceDialogProps {
   onSuccess?: () => void;
 }
 
+// Fields shown in the EG-form copy tab. These are the *metadata* keys as they
+// appear on a similar case's dataset. Renames, legacy aliases and constant
+// filtering are centralised in `lib/case-field-mapping.ts`; consult that
+// module when adding or renaming a field.
 const egFields = [
   "Ref",
   "Tranche",
-  "EB_RMB",
+  "EB_RM",
   "NO",
   "NO_R",
   "Staff1",
@@ -52,7 +66,6 @@ const egFields = [
   "Staff1_Info",
   "Staff2_Info",
   "Applicant",
-  "App_Cat",
   "App_PName",
   "D_ReqF_SWD",
   "D_PlnT_SWD",
@@ -66,10 +79,6 @@ const egFields = [
   "Q12e_JCost",
   "Q12f_RReject",
   "Q12g_JRem",
-  "Q13a",
-  "Q13b",
-  "Remarks_EGF",
-  "D_Entry",
 ];
 
 const appFields = [
@@ -107,7 +116,9 @@ const sectionLabels: Record<ReplacementSection, string> = {
 function formatValue(value: any): string {
   if (value === null || value === undefined || value === "") return "—";
   if (typeof value === "object") return JSON.stringify(value);
-  return String(value);
+  const s = String(value);
+  if (s.toLowerCase() === "nan") return "NA";
+  return s;
 }
 
 function toEditString(value: any): string {
@@ -121,12 +132,7 @@ function getSourceValue(
   fieldName: string,
   metadata: Record<string, any>,
 ): any {
-  if (section === "eg") return metadata?.[fieldName];
-  if (section === "application")
-    return metadata?.pa_form_data?.[fieldName] ?? metadata?.[fieldName];
-  if (section === "catalogue")
-    return metadata?.catalogue_data?.[fieldName] ?? metadata?.[fieldName];
-  return undefined;
+  return normalizeNaLike(resolveSourceValue(section, fieldName, metadata));
 }
 
 function getOriginalValue(
@@ -134,17 +140,20 @@ function getOriginalValue(
   fieldName: string,
   originalCase: Case,
 ): any {
-  if (section === "eg") return originalCase.egData?.[fieldName];
-  if (section === "application")
-    return originalCase.applicationData?.[fieldName];
-  if (section === "catalogue") {
+  const target = resolveTargetSlot(section, fieldName);
+  let raw: any;
+  if (target.section === "eg") raw = originalCase.egData?.[target.fieldName];
+  else if (target.section === "application")
+    raw = originalCase.applicationData?.[target.fieldName];
+  else if (target.section === "catalogue") {
     const catData = originalCase.catalogueData || {};
     if (Array.isArray(catData.products) && catData.products.length > 0) {
-      return catData.products[0][fieldName];
+      raw = catData.products[0][target.fieldName];
+    } else {
+      raw = catData[target.fieldName];
     }
-    return catData[fieldName];
   }
-  return undefined;
+  return normalizeNaLike(raw);
 }
 
 function getSectionIcon(section: ReplacementSection | "case") {
@@ -289,9 +298,21 @@ export function SimilarCaseReplaceDialog({
   async function handleConfirm() {
     if (!originalCase || !similarCase || replacements.length === 0) return;
 
+    // Translate metadata keys to their real target section/field on the
+    // case before sending to backend. Backend writes blindly to
+    // `<section>Data[fieldName]`, so mapping happens here. Rules live in
+    // lib/case-field-mapping.ts.
+    const backendReplacements: FieldReplacement[] = replacements.map((r) => {
+      const target = resolveTargetSlot(r.section, r.fieldName);
+      if (target.section === r.section && target.fieldName === r.fieldName) {
+        return r;
+      }
+      return { section: target.section, fieldName: target.fieldName, value: r.value };
+    });
+
     const result = await replaceFromSimilar(originalCase.id, {
       sourceDatasetId: similarCase.id,
-      replacements,
+      replacements: backendReplacements,
     });
 
     if (result.success) {
@@ -364,6 +385,47 @@ export function SimilarCaseReplaceDialog({
     );
   }
 
+  // Applying a picked staff row back-fills the sibling field (label ↔ info)
+  // so users don't have to pick twice. Only overrides the sibling if it's
+  // not already copied with a different value.
+  function handlePickStaff(
+    fieldName: string,
+    picked: { label: string; info: string },
+  ) {
+    const isLabel = fieldName === "Staff1" || fieldName === "Staff2";
+    const isInfo = fieldName === "Staff1_Info" || fieldName === "Staff2_Info";
+    const sibling = isLabel
+      ? `${fieldName}_Info`
+      : isInfo
+        ? fieldName.replace("_Info", "")
+        : null;
+    const primaryValue = isLabel ? picked.label : picked.info;
+    const siblingValue = isLabel ? picked.info : picked.label;
+
+    setReplacements((prev) => {
+      const eg: ReplacementSection = "eg";
+      const next: FieldReplacement[] = prev.some(
+        (r) => r.section === "eg" && r.fieldName === fieldName,
+      )
+        ? prev.map((r) =>
+            r.section === "eg" && r.fieldName === fieldName
+              ? { ...r, value: primaryValue }
+              : r,
+          )
+        : [...prev, { section: eg, fieldName, value: primaryValue }];
+      if (!sibling) return next;
+      return next.some(
+        (r) => r.section === "eg" && r.fieldName === sibling,
+      )
+        ? next.map((r) =>
+            r.section === "eg" && r.fieldName === sibling
+              ? { ...r, value: siblingValue }
+              : r,
+          )
+        : [...next, { section: eg, fieldName: sibling, value: siblingValue }];
+    });
+  }
+
   function renderFieldRow(
     section: ReplacementSection,
     fieldName: string,
@@ -428,13 +490,63 @@ export function SimilarCaseReplaceDialog({
             )}
           </div>
           {copied ? (
-            <Textarea
-              value={toEditString(displayValue)}
-              onChange={(e) =>
-                handleEditValue(section, fieldName, e.target.value)
+            (() => {
+              const isStaffLabel =
+                section === "eg" &&
+                (fieldName === "Staff1" || fieldName === "Staff2");
+              const isStaffInfo =
+                section === "eg" &&
+                (fieldName === "Staff1_Info" || fieldName === "Staff2_Info");
+              if (isStaffLabel || isStaffInfo) {
+                return (
+                  <div className="mt-1">
+                    <StaffSelect
+                      mode={isStaffLabel ? "label" : "info"}
+                      value={toEditString(displayValue)}
+                      onSelect={({ label, info }) =>
+                        handlePickStaff(fieldName, { label, info })
+                      }
+                      onChange={(raw) =>
+                        handleEditValue(section, fieldName, raw)
+                      }
+                    />
+                  </div>
+                );
               }
-              className="min-h-[60px] text-sm resize-y mt-1"
-            />
+              if (section === "eg" && fieldName === "Q12a") {
+                return (
+                  <div className="mt-1">
+                    <Q12aSelect
+                      value={toEditString(displayValue)}
+                      onChange={(next) =>
+                        handleEditValue(section, fieldName, next)
+                      }
+                    />
+                  </div>
+                );
+              }
+              if (section === "eg" && fieldName === "Q12f_RReject") {
+                return (
+                  <div className="mt-1">
+                    <Q12fRejectSelect
+                      value={toEditString(displayValue)}
+                      onChange={(next) =>
+                        handleEditValue(section, fieldName, next)
+                      }
+                    />
+                  </div>
+                );
+              }
+              return (
+                <Textarea
+                  value={toEditString(displayValue)}
+                  onChange={(e) =>
+                    handleEditValue(section, fieldName, e.target.value)
+                  }
+                  className="min-h-[60px] text-sm resize-y mt-1"
+                />
+              );
+            })()
           ) : (
             <div
               className="break-words cursor-pointer hover:bg-accent/50 rounded-sm -mx-1 px-1 -my-0.5 py-0.5 transition-colors"
@@ -458,7 +570,7 @@ export function SimilarCaseReplaceDialog({
 
   function renderCompareStep() {
     return (
-      <div className="flex flex-col gap-4">
+      <div className="flex flex-col gap-4 h-full min-h-0">
         <div className="flex items-center justify-between p-3 rounded-lg bg-muted/30 border text-sm shrink-0">
           <div className="flex-1 min-w-0 pr-2">
             <div className="text-xs text-muted-foreground mb-0.5">Source (similar case)</div>
@@ -482,6 +594,7 @@ export function SimilarCaseReplaceDialog({
         <Tabs
           value={activeTab}
           onValueChange={(v) => setActiveTab(v as ReplacementSection)}
+          className="flex-1 min-h-0 flex flex-col"
         >
           <TabsList className="grid w-full grid-cols-3 shrink-0">
             <TabsTrigger value="eg">EG Form</TabsTrigger>
@@ -489,7 +602,11 @@ export function SimilarCaseReplaceDialog({
             <TabsTrigger value="catalogue">Catalogue</TabsTrigger>
           </TabsList>
           {fieldGroups.map(({ section, fields }) => (
-            <TabsContent key={section} value={section} className="mt-4">
+            <TabsContent
+              key={section}
+              value={section}
+              className="mt-4 flex-1 min-h-0 flex flex-col"
+            >
               <div className="flex items-center justify-between mb-2 shrink-0">
                 <div className="grid grid-cols-2 gap-2 text-xs font-medium text-muted-foreground px-1 flex-1">
                   <div className="flex items-center gap-1">
@@ -518,7 +635,7 @@ export function SimilarCaseReplaceDialog({
                   </Button>
                 </div>
               </div>
-              <ScrollArea className="max-h-[55vh] pr-2">
+              <ScrollArea className="flex-1 min-h-0 pr-2">
                 <div className="space-y-2">
                   {originalCase &&
                     similarCase?.metadata &&

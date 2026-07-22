@@ -21,6 +21,9 @@ import {
   Replace,
   Edit,
   Trash2,
+  ArrowUpDown,
+  ArrowUp,
+  ArrowDown,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -76,6 +79,8 @@ import {
   type SimilarMatch,
 } from "@/hooks/use-similar-matches";
 import { useGetCases } from "@/hooks/use-get-cases";
+import { StaffSelect } from "@/components/staff-select";
+import { Q12aSelect, Q12fRejectSelect } from "@/components/eg-field-select";
 import { useUpdateCaseStatus } from "@/hooks/use-update-case-status";
 import { useSaveCaseData } from "@/hooks/use-save-case-data";
 import { useDeleteCase } from "@/hooks/use-delete-case";
@@ -255,7 +260,10 @@ const egFields = [
   "EB_RM",
   "NO",
   "NO_R",
-  "Staff",
+  "Staff1",
+  "Staff1_Info",
+  "Staff2",
+  "Staff2_Info",
   "D_ReqF_SWD",
   "D_PlnT_SWD",
   "D_EGF_Out",
@@ -484,6 +492,46 @@ export function Stage3Approval({ onBack, onComplete }: Stage3ApprovalProps) {
   const [trancheFilter, setTrancheFilter] = useState<string>("all");
   const [startDate, setStartDate] = useState<string>("");
   const [endDate, setEndDate] = useState<string>("");
+  const [sortColumn, setSortColumn] = useState<string | null>(null);
+  const [sortDirection, setSortDirection] = useState<"asc" | "desc">("asc");
+  const handleSort = useCallback(
+    (column: string) => {
+      if (sortColumn === column) {
+        setSortDirection((d) => (d === "asc" ? "desc" : "asc"));
+      } else {
+        setSortColumn(column);
+        setSortDirection("asc");
+      }
+    },
+    [sortColumn],
+  );
+  const getSortValue = useCallback(
+    (caseItem: any, column: string): string | number => {
+      switch (column) {
+        case "caseNumber":
+          return caseItem.caseNumber ?? "";
+        case "status":
+          return caseItem.status ?? "";
+        case "updatedAt":
+          return caseItem.updatedAt
+            ? new Date(caseItem.updatedAt).getTime()
+            : 0;
+        case "productName":
+          return (
+            caseItem.egData?.App_PNam_Mod ||
+            caseItem.applicationData?.PA_PName ||
+            ""
+          );
+        case "refNo":
+          return caseItem.egData?.Ref || caseItem.egData?.SWD_Ref || "";
+        default: {
+          const v = caseItem.egData?.[column];
+          return v === undefined || v === null ? "" : v;
+        }
+      }
+    },
+    [],
+  );
   const [generatedJustification, setGeneratedJustification] = useState("");
   const [generationVersion, setGenerationVersion] = useState(0);
   const [pendingDecision, setPendingDecision] = useState<
@@ -1574,19 +1622,94 @@ export function Stage3Approval({ onBack, onComplete }: Stage3ApprovalProps) {
                         </TableHead>
                         {/* Priority columns first */}
                         <TableHead className="font-semibold whitespace-nowrap px-4 bg-primary/5">
-                          Case Number
+                          <button
+                            type="button"
+                            onClick={() => handleSort("caseNumber")}
+                            className="inline-flex items-center gap-1 hover:text-primary"
+                          >
+                            Case Number
+                            {sortColumn === "caseNumber" ? (
+                              sortDirection === "asc" ? (
+                                <ArrowUp className="w-3 h-3" />
+                              ) : (
+                                <ArrowDown className="w-3 h-3" />
+                              )
+                            ) : (
+                              <ArrowUpDown className="w-3 h-3 opacity-40" />
+                            )}
+                          </button>
                         </TableHead>
                         <TableHead className="font-semibold whitespace-nowrap px-4 bg-primary/5">
-                          Status
+                          <button
+                            type="button"
+                            onClick={() => handleSort("status")}
+                            className="inline-flex items-center gap-1 hover:text-primary"
+                          >
+                            Status
+                            {sortColumn === "status" ? (
+                              sortDirection === "asc" ? (
+                                <ArrowUp className="w-3 h-3" />
+                              ) : (
+                                <ArrowDown className="w-3 h-3" />
+                              )
+                            ) : (
+                              <ArrowUpDown className="w-3 h-3 opacity-40" />
+                            )}
+                          </button>
                         </TableHead>
                         <TableHead className="font-semibold whitespace-nowrap px-4 bg-primary/5">
-                          Updated Date
+                          <button
+                            type="button"
+                            onClick={() => handleSort("updatedAt")}
+                            className="inline-flex items-center gap-1 hover:text-primary"
+                          >
+                            Updated Date
+                            {sortColumn === "updatedAt" ? (
+                              sortDirection === "asc" ? (
+                                <ArrowUp className="w-3 h-3" />
+                              ) : (
+                                <ArrowDown className="w-3 h-3" />
+                              )
+                            ) : (
+                              <ArrowUpDown className="w-3 h-3 opacity-40" />
+                            )}
+                          </button>
                         </TableHead>
                         <TableHead className="font-semibold whitespace-nowrap px-4 bg-primary/5">
-                          Product Name
+                          <button
+                            type="button"
+                            onClick={() => handleSort("productName")}
+                            className="inline-flex items-center gap-1 hover:text-primary"
+                          >
+                            Product Name
+                            {sortColumn === "productName" ? (
+                              sortDirection === "asc" ? (
+                                <ArrowUp className="w-3 h-3" />
+                              ) : (
+                                <ArrowDown className="w-3 h-3" />
+                              )
+                            ) : (
+                              <ArrowUpDown className="w-3 h-3 opacity-40" />
+                            )}
+                          </button>
                         </TableHead>
                         <TableHead className="font-semibold whitespace-nowrap px-4 bg-primary/5">
-                          Ref No
+                          <button
+                            type="button"
+                            onClick={() => handleSort("refNo")}
+                            className="inline-flex items-center gap-1 hover:text-primary"
+                          >
+                            Ref No
+                            {sortColumn === "refNo" ? (
+                              sortDirection === "asc" ? (
+                                <ArrowUp className="w-3 h-3" />
+                              ) : (
+                                <ArrowDown className="w-3 h-3" />
+                              )
+                            ) : (
+                              <ArrowUpDown className="w-3 h-3 opacity-40" />
+                            )}
+                          </button>
                         </TableHead>
                         {/* Other EG data columns */}
                         {[
@@ -1595,7 +1718,8 @@ export function Stage3Approval({ onBack, onComplete }: Stage3ApprovalProps) {
                           "EB_RM",
                           "NO",
                           "NO_R",
-                          "Staff",
+                          "Staff1",
+                          "Staff2",
                           "D_ReqF_SWD",
                           "D_PlnT_SWD",
                           "D_EGF_Out",
@@ -1636,7 +1760,22 @@ export function Stage3Approval({ onBack, onComplete }: Stage3ApprovalProps) {
                             key={col}
                             className="whitespace-nowrap px-4"
                           >
-                            {col}
+                            <button
+                              type="button"
+                              onClick={() => handleSort(col)}
+                              className="inline-flex items-center gap-1 hover:text-primary"
+                            >
+                              {col}
+                              {sortColumn === col ? (
+                                sortDirection === "asc" ? (
+                                  <ArrowUp className="w-3 h-3" />
+                                ) : (
+                                  <ArrowDown className="w-3 h-3" />
+                                )
+                              ) : (
+                                <ArrowUpDown className="w-3 h-3 opacity-40" />
+                              )}
+                            </button>
                           </TableHead>
                         ))}
                         {/* Sticky Actions Column Header */}
@@ -1709,6 +1848,21 @@ export function Stage3Approval({ onBack, onComplete }: Stage3ApprovalProps) {
                             dateMatch &&
                             trancheMatch
                           );
+                        })
+                        .sort((a, b) => {
+                          if (!sortColumn) return 0;
+                          const av = getSortValue(a, sortColumn);
+                          const bv = getSortValue(b, sortColumn);
+                          let cmp = 0;
+                          if (typeof av === "number" && typeof bv === "number") {
+                            cmp = av - bv;
+                          } else {
+                            cmp = String(av).localeCompare(String(bv), undefined, {
+                              numeric: true,
+                              sensitivity: "base",
+                            });
+                          }
+                          return sortDirection === "asc" ? cmp : -cmp;
                         })
                         .map((caseItem) => {
                           const isSelected = selectedProducts.includes(
@@ -1801,7 +1955,12 @@ export function Stage3Approval({ onBack, onComplete }: Stage3ApprovalProps) {
                                   : "—"}
                               </TableCell>
                               <TableCell className="font-medium whitespace-nowrap px-4 bg-primary/5">
-                                {productName}
+                                <span
+                                  className="block max-w-[100px] truncate"
+                                  title={String(productName)}
+                                >
+                                  {productName}
+                                </span>
                               </TableCell>
                               <TableCell className="font-mono whitespace-nowrap px-4 bg-primary/5">
                                 {refNo}
@@ -1813,7 +1972,8 @@ export function Stage3Approval({ onBack, onComplete }: Stage3ApprovalProps) {
                                 "EB_RM",
                                 "NO",
                                 "NO_R",
-                                "Staff",
+                                "Staff1",
+                                "Staff2",
                                 "D_ReqF_SWD",
                                 "D_PlnT_SWD",
                                 "D_EGF_Out",
@@ -2491,6 +2651,17 @@ export function Stage3Approval({ onBack, onComplete }: Stage3ApprovalProps) {
                     {egFields.map((field) => {
                       const val = egFormData[field] || "";
                       const long = isLongTextField(field, val);
+                      const isStaffLabel =
+                        field === "Staff1" || field === "Staff2";
+                      const isStaffInfo =
+                        field === "Staff1_Info" || field === "Staff2_Info";
+                      // Selecting either half auto-fills the sibling field so
+                      // Staff1 <-> Staff1_Info stay in sync with the roster.
+                      const siblingField = isStaffLabel
+                        ? `${field}_Info`
+                        : isStaffInfo
+                          ? field.replace("_Info", "")
+                          : null;
                       return (
                         <div
                           key={field}
@@ -2500,7 +2671,55 @@ export function Stage3Approval({ onBack, onComplete }: Stage3ApprovalProps) {
                           )}
                         >
                           <Label className="text-xs">{field}</Label>
-                          {long ? (
+                          {isStaffLabel || isStaffInfo ? (
+                            <StaffSelect
+                              mode={isStaffLabel ? "label" : "info"}
+                              value={val}
+                              onSelect={({ label, info }) => {
+                                setIsEditDirty(true);
+                                setEgFormData((prev) => ({
+                                  ...prev,
+                                  [field]: isStaffLabel ? label : info,
+                                  ...(siblingField
+                                    ? {
+                                        [siblingField]: isStaffLabel
+                                          ? info
+                                          : label,
+                                      }
+                                    : {}),
+                                }));
+                              }}
+                              onChange={(raw) => {
+                                setIsEditDirty(true);
+                                setEgFormData((prev) => ({
+                                  ...prev,
+                                  [field]: raw,
+                                }));
+                              }}
+                            />
+                          ) : field === "Q12a" ? (
+                            <Q12aSelect
+                              value={val}
+                              onChange={(next) => {
+                                setIsEditDirty(true);
+                                setEgFormData((prev) => ({
+                                  ...prev,
+                                  [field]: next,
+                                }));
+                              }}
+                            />
+                          ) : field === "Q12f_RReject" ? (
+                            <Q12fRejectSelect
+                              value={val}
+                              onChange={(next) => {
+                                setIsEditDirty(true);
+                                setEgFormData((prev) => ({
+                                  ...prev,
+                                  [field]: next,
+                                }));
+                              }}
+                            />
+                          ) : long ? (
                             <Textarea
                               value={val}
                               onChange={(e) => {
