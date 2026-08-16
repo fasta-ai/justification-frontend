@@ -2367,13 +2367,8 @@ export function Stage3Approval({ onBack, onComplete }: Stage3ApprovalProps) {
                               variant="outline"
                               size="sm"
                               className="h-7 px-2 gap-1"
-                              onClick={() =>
-                                openJustificationModal(
-                                  caseItem.decision,
-                                  caseItem,
-                                )
-                              }
-                              title="Open justification workspace seeded with this case"
+                              onClick={() => handleOpenReplaceDialog(caseItem)}
+                              title="Open copy + justification workspace seeded with this case"
                             >
                               <Sparkles className="h-3.5 w-3.5" />
                               Justification
@@ -2904,7 +2899,9 @@ export function Stage3Approval({ onBack, onComplete }: Stage3ApprovalProps) {
         </Dialog>
       )}
 
-      {/* Similar Case Replacement Dialog */}
+      {/* Similar Case Replacement Dialog - widened to two columns: copy
+          workflow on the left, justification workspace (seeded with the same
+          similar case) on the right. */}
       <SimilarCaseReplaceDialog
         open={isReplaceDialogOpen}
         onOpenChange={setIsReplaceDialogOpen}
@@ -2915,6 +2912,17 @@ export function Stage3Approval({ onBack, onComplete }: Stage3ApprovalProps) {
         }
         similarCase={replaceSimilarCase}
         onSuccess={handleReplaceSuccess}
+        justification={{
+          isGenerating: isGeneratingJustification,
+          isUpdating: isUpdatingCase,
+          isSavingDraft,
+          onGenerate: generateJustificationWithInputs,
+          onConfirm: async (justificationText, decision) => {
+            await handleConfirmDecision(justificationText, decision);
+            setIsReplaceDialogOpen(false);
+          },
+          onSaveDraft: handleSaveJustificationDraft,
+        }}
       />
 
       {/* Justification Modal — friendly per-decision workspace */}

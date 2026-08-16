@@ -8,6 +8,7 @@ import {
   ChevronLeft,
   History,
   RotateCcw,
+  Sparkles,
   User,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -23,6 +24,10 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Separator } from "@/components/ui/separator";
 import { Textarea } from "@/components/ui/textarea";
 import { StaffSelect } from "@/components/staff-select";
+import {
+  JustificationPanel,
+  type JustificationPanelProps,
+} from "@/components/justification-modal";
 import {
   Q12aSelect,
   Q12fRejectSelect,
@@ -49,6 +54,22 @@ interface SimilarCaseReplaceDialogProps {
   originalCase: Case | null;
   similarCase: SimilarJustification | null;
   onSuccess?: () => void;
+  /**
+   * When provided, the dialog widens into a two-column layout: the copy
+   * workflow on the left and a justification workspace (seeded with the
+   * similar case) on the right, so reviewers can reference the justification
+   * while choosing fields to copy. Carries the generate/confirm/save-draft
+   * handlers from the host page.
+   */
+  justification?: Pick<
+    JustificationPanelProps,
+    | "isGenerating"
+    | "isUpdating"
+    | "isSavingDraft"
+    | "onGenerate"
+    | "onConfirm"
+    | "onSaveDraft"
+  >;
 }
 
 // Fields shown in the EG-form copy tab. These are the *metadata* keys as they
@@ -175,6 +196,7 @@ export function SimilarCaseReplaceDialog({
   originalCase,
   similarCase,
   onSuccess,
+  justification,
 }: SimilarCaseReplaceDialogProps) {
   const { user } = useAuth();
   const { replaceFromSimilar, isLoading } = useReplaceFromSimilar();
@@ -937,7 +959,14 @@ export function SimilarCaseReplaceDialog({
 
   return (
     <Dialog open={open} onOpenChange={handleClose}>
-      <DialogContent className="sm:max-w-[900px] max-h-[90vh] overflow-hidden flex flex-col">
+      <DialogContent
+        className={cn(
+          "max-h-[90vh] overflow-hidden flex flex-col",
+          justification
+            ? "sm:max-w-[1400px] w-[95vw]"
+            : "sm:max-w-[900px]",
+        )}
+      >
         <DialogHeader>
           <div className="flex items-center justify-between gap-3 pr-8">
             <DialogTitle className="flex items-center gap-2">
@@ -963,11 +992,44 @@ export function SimilarCaseReplaceDialog({
             )}
           </div>
         </DialogHeader>
-        {renderStepper()}
-        <div className="py-1 flex-1 overflow-y-auto min-h-0">
-          {step === 1 && renderCompareStep()}
-          {step === 2 && renderPreviewStep()}
-          {step === 3 && renderDoneStep()}
+        <div className="flex-1 min-h-0 flex flex-col lg:flex-row gap-4">
+          {/* Left column - copy workflow */}
+          <div className="flex-1 min-w-0 flex flex-col min-h-0">
+            {renderStepper()}
+            <div className="py-1 flex-1 overflow-y-auto min-h-0">
+              {step === 1 && renderCompareStep()}
+              {step === 2 && renderPreviewStep()}
+              {step === 3 && renderDoneStep()}
+            </div>
+          </div>
+
+          {/* Right column - justification workspace seeded with the similar
+              case, for easy reference while copying. */}
+          {justification && (
+            <div className="flex-1 min-w-0 flex flex-col min-h-0 lg:max-w-[620px] lg:border-l lg:pl-4">
+              <div className="flex items-center gap-2 pb-2 shrink-0">
+                <Sparkles className="w-4 h-4 text-primary" />
+                <span className="text-sm font-semibold">
+                  Justification - Case {originalCase?.caseNumber || ""}
+                </span>
+              </div>
+              <JustificationPanel
+                open={open}
+                onClose={handleClose}
+                selectedCase={originalCase}
+                initialDecision={
+                  similarCase?.decision === "rejected" ? "rejected" : "approved"
+                }
+                seedSimilarCase={similarCase}
+                isGenerating={justification.isGenerating}
+                isUpdating={justification.isUpdating}
+                isSavingDraft={justification.isSavingDraft}
+                onGenerate={justification.onGenerate}
+                onConfirm={justification.onConfirm}
+                onSaveDraft={justification.onSaveDraft}
+              />
+            </div>
+          )}
         </div>
       </DialogContent>
     </Dialog>

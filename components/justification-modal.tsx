@@ -84,6 +84,32 @@ interface JustificationModalProps {
   onSaveDraft?: (payload: SaveDraftPayload) => Promise<void> | void;
 }
 
+/**
+ * Props for the embeddable justification workspace. `open` mirrors the host
+ * dialog's open state so the reset/prefill effects fire when the host opens;
+ * `onClose` is invoked by the Cancel button.
+ */
+export interface JustificationPanelProps {
+  open: boolean;
+  onClose: () => void;
+  selectedCase: Case | null;
+  initialDecision: "approved" | "rejected";
+  seedSimilarCase?: SimilarJustification | null;
+  isGenerating: boolean;
+  isUpdating: boolean;
+  isSavingDraft?: boolean;
+  onGenerate: (
+    inputs: JustificationInputs,
+    decision: "approved" | "rejected",
+    seedSimilar?: SimilarJustification | null,
+  ) => Promise<GenerateResult | string>;
+  onConfirm: (
+    justification: string,
+    decision: "approved" | "rejected",
+  ) => Promise<void> | void;
+  onSaveDraft?: (payload: SaveDraftPayload) => Promise<void> | void;
+}
+
 function extractInputs(c: Case | null): JustificationInputs {
   if (!c) {
     return {
@@ -122,6 +148,55 @@ export function JustificationModal({
   onConfirm,
   onSaveDraft,
 }: JustificationModalProps) {
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="sm:max-w-[720px] max-h-[90vh] overflow-hidden flex flex-col">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2">
+            <Sparkles className="w-5 h-5 text-primary" />
+            Justification — Case {selectedCase?.caseNumber || ""}
+          </DialogTitle>
+          <DialogDescription>
+            Review the fields the AI will use, generate a draft, edit it, then
+            save as a draft or confirm your decision.
+          </DialogDescription>
+        </DialogHeader>
+        <JustificationPanel
+          open={open}
+          onClose={() => onOpenChange(false)}
+          selectedCase={selectedCase}
+          initialDecision={initialDecision}
+          seedSimilarCase={seedSimilarCase}
+          isGenerating={isGenerating}
+          isUpdating={isUpdating}
+          isSavingDraft={isSavingDraft}
+          onGenerate={onGenerate}
+          onConfirm={onConfirm}
+          onSaveDraft={onSaveDraft}
+        />
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+/**
+ * Embeddable justification workspace: inputs, AI generation, draft editing,
+ * advisory panel, decision toggle and footer actions. Rendered standalone by
+ * JustificationModal and side-by-side with the copy dialog.
+ */
+export function JustificationPanel({
+  open,
+  onClose,
+  selectedCase,
+  initialDecision,
+  seedSimilarCase,
+  isGenerating,
+  isUpdating,
+  isSavingDraft = false,
+  onGenerate,
+  onConfirm,
+  onSaveDraft,
+}: JustificationPanelProps) {
   const [decision, setDecision] = useState<"approved" | "rejected">(
     initialDecision,
   );
@@ -344,19 +419,7 @@ export function JustificationModal({
 
   return (
     <>
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-[720px] max-h-[90vh] overflow-hidden flex flex-col">
-        <DialogHeader>
-          <DialogTitle className="flex items-center gap-2">
-            <Sparkles className="w-5 h-5 text-primary" />
-            Justification — Case {selectedCase?.caseNumber || ""}
-          </DialogTitle>
-          <DialogDescription>
-            Review the fields the AI will use, generate a draft, edit it, then
-            save as a draft or confirm your decision.
-          </DialogDescription>
-        </DialogHeader>
-
+    <div className="flex flex-col flex-1 min-h-0">
         <div className="flex-1 overflow-y-auto space-y-4 pr-1">
           {seedInfo && (
             <div className="rounded-lg border bg-muted/40 p-3 text-xs">
@@ -611,7 +674,7 @@ export function JustificationModal({
         <DialogFooter className="pt-2 border-t gap-2">
           <Button
             variant="outline"
-            onClick={() => onOpenChange(false)}
+            onClick={onClose}
             disabled={isBusy}
           >
             Cancel
@@ -646,8 +709,7 @@ export function JustificationModal({
             {`Confirm ${decision === "approved" ? "Approval" : "Rejection"}`}
           </Button>
         </DialogFooter>
-      </DialogContent>
-    </Dialog>
+    </div>
 
     <AlertDialog open={saveConfirmOpen} onOpenChange={setSaveConfirmOpen}>
       <AlertDialogContent>

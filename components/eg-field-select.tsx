@@ -21,24 +21,8 @@ import {
 import { Input } from "@/components/ui/input";
 
 /**
- * Fixed reason options for Q12a. Selecting one populates the field; the
- * user can also type free text (existing legacy values like "Yes" / "No" /
- * "/" are preserved verbatim and shown as-is).
- */
-export const Q12A_OPTIONS: readonly string[] = [
-  "1 - not belonging to innovative and technology products",
-  "2 - non-intact system comprising an assortment of self-selected components and lacking system integrity",
-  "3 - items with safety issue",
-  "4 - items with insufficient proof of efficacy",
-  "5 - items beyond the scope of the I&T Fund",
-  "6 - health monitoring gadgets not connected to monitoring/record system for further systematic and consistent analysis",
-  "7 - standalone items",
-  "8 - excessive collection of personal data",
-  "NA",
-];
-
-/**
- * Fixed options for Q12f_RReject.
+ * Fixed options for Q12f_RReject. Also used for Q12a per user request -
+ * both fields now share the same short Yes/No/NA// list.
  */
 export const Q12F_RREJECT_OPTIONS: readonly string[] = ["Yes", "No", "NA", "/"];
 
@@ -197,14 +181,15 @@ interface Q12SelectProps {
 }
 
 /**
- * Q12a picker — 8 numbered reason options + NA, plus free text for legacy
- * values ("Yes" / "No" / "/") or any custom string.
+ * Q12a picker — now uses the same Yes / No / NA / / list as Q12f per user
+ * request. Legacy long-form reason values are preserved verbatim and remain
+ * editable via free text.
  */
 export function Q12aSelect({ value, onChange, className }: Q12SelectProps) {
   return (
     <OptionCombobox
       value={value}
-      options={Q12A_OPTIONS}
+      options={Q12F_RREJECT_OPTIONS}
       onChange={onChange}
       placeholder="Select reason…"
       freeTextPlaceholder="e.g. Yes, No, /, or free text"
