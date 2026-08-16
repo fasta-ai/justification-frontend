@@ -121,6 +121,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     localStorage.removeItem("user");
     setUser(null);
     setAccessToken(null);
+    // Clear the httpOnly auth cookies server-side (client JS can't delete
+    // them) so proxied API calls stop sending stale credentials.
+    fetch("/api/auth/logout", { method: "POST" }).catch(() => {});
   }, []);
 
   const refreshAccessToken = useCallback(async (): Promise<string | null> => {
@@ -176,6 +179,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       refreshingRef.current = null;
     }
   }, [logout]);
+
+  // Refresh immediately if the persisted token is already expired - covers
+  // reopening a tab after sleep/idle. If the refresh token is also dead this
+  // logs out, and ProtectedRoute redirects to /login instead of rendering
+  // pages whose first data fetch would fail with "Unauthorized".
+  useEffect(() => {
+    if (isLoading) return;
+    const token = localStorage.getItem("accessToken");
+    if (token && isTokenExpiredOrAboutToExpire(token)) {
+      refreshAccessToken();
+    }
+  }, [isLoading, refreshAccessToken]);
 
   // Periodic token refresh while the app is open
   useEffect(() => {
