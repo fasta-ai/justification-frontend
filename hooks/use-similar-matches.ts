@@ -94,6 +94,10 @@ export function useSimilarMatches(): UseSimilarMatchesReturn {
           // mirrors App_PName + catalogueDesc so the query embeds into the
           // same neighbourhood as the catalogue/EG rows we want to copy from.
           extraText: [item.egName, item.egDesc].filter(Boolean).join(" ") || undefined,
+          // EG product name on its own: an extra tier-2 (fuzzy) query variant,
+          // weighted below PA_PName. Kept separate from extraText so the short
+          // name is not diluted by the description for trigram scoring.
+          egName: item.egName || undefined,
           datasetName: options.datasetName,
           datasetType: options.datasetType,
           limit: options.limit ?? 10,

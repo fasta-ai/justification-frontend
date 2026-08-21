@@ -1669,19 +1669,6 @@ export function Stage3Approval({ onBack, onComplete }: Stage3ApprovalProps) {
                     onChange={(e) => setEndDate(e.target.value)}
                     className="h-9 w-32"
                   />
-                  {selectedProducts.length > 0 && (
-                    <Button
-                      variant="destructive"
-                      size="sm"
-                      onClick={handleOpenBulkDeleteConfirm}
-                      disabled={isDeletingCase}
-                      className="h-9 shrink-0"
-                      title="Delete selected cases"
-                    >
-                      <Trash2 className="w-4 h-4 mr-2" />
-                      Delete ({selectedProducts.length})
-                    </Button>
-                  )}
                   <Button
                     variant="outline"
                     size="icon"
@@ -1710,6 +1697,35 @@ export function Stage3Approval({ onBack, onComplete }: Stage3ApprovalProps) {
                 <div className="bg-red-50 border border-red-200 text-red-800 px-4 py-3 rounded-lg mb-4">
                   <p className="font-semibold">Error loading cases</p>
                   <p className="text-sm">{casesError}</p>
+                </div>
+              )}
+
+              {selectedProducts.length > 0 && !isLoadingCases && (
+                <div className="flex items-center gap-3 mb-3 px-3 py-2 rounded-lg border bg-muted/40 text-sm">
+                  <span className="font-medium">
+                    {selectedProducts.length} selected
+                  </span>
+                  <div className="ml-auto flex items-center gap-2">
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={clearSelection}
+                      disabled={isDeletingCase}
+                      className="h-8"
+                    >
+                      Clear
+                    </Button>
+                    <Button
+                      variant="destructive"
+                      size="sm"
+                      onClick={handleOpenBulkDeleteConfirm}
+                      disabled={isDeletingCase}
+                      className="h-8"
+                    >
+                      <Trash2 className="w-4 h-4 mr-1.5" />
+                      Delete selected
+                    </Button>
+                  </div>
                 </div>
               )}
 
