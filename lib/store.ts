@@ -10,7 +10,7 @@ interface ProductStore {
   isGeneratingJustification: boolean
   commonSeason: string
   commonTranch: string
-  workflowMode: 'full' | 'direct' | null
+  workflowMode: "full" | "direct" | null
 
   setStage: (stage: Stage) => void
   addProduct: (product: Product) => void
@@ -19,6 +19,7 @@ interface ProductStore {
   setProducts: (products: Product[]) => void
   toggleProductSelection: (id: string) => void
   selectAllProducts: () => void
+  setSelectedProducts: (ids: string[]) => void
   clearSelection: () => void
   addJustification: (justification: ApprovalJustification) => void
   setSimilarJustifications: (justifications: SimilarJustification[]) => void
@@ -26,7 +27,7 @@ interface ProductStore {
   setCommonSeason: (season: string) => void
   setCommonTranch: (tranch: string) => void
   applyCommonSeasonAndTranch: () => void
-  setWorkflowMode: (mode: 'full' | 'direct' | null) => void
+  setWorkflowMode: (mode: "full" | "direct" | null) => void
   resetStore: () => void
 }
 
@@ -39,7 +40,7 @@ const initialState = {
   isGeneratingJustification: false,
   commonSeason: "",
   commonTranch: "",
-  workflowMode: null as 'full' | 'direct' | null,
+  workflowMode: null as "full" | "direct" | null,
 }
 
 export const useProductStore = create<ProductStore>((set, get) => ({
@@ -77,6 +78,8 @@ export const useProductStore = create<ProductStore>((set, get) => ({
       selectedProducts: state.products.filter((p) => p.status === "pending_review").map((p) => p.id),
     })),
 
+  setSelectedProducts: (ids) => set({ selectedProducts: ids }),
+
   clearSelection: () => set({ selectedProducts: [] }),
 
   addJustification: (justification) =>
@@ -105,13 +108,15 @@ export const useProductStore = create<ProductStore>((set, get) => ({
         season: state.commonSeason,
         tranch: state.commonTranch,
         // Also update the EG data's Tranche field if egData exists
-        egData: p.egData ? {
-          ...p.egData,
-          data: {
-            ...p.egData.data,
-            Tranche: state.commonTranch,
-          }
-        } : p.egData,
+        egData: p.egData
+          ? {
+              ...p.egData,
+              data: {
+                ...p.egData.data,
+                Tranche: state.commonTranch,
+              },
+            }
+          : p.egData,
       })),
     })),
 

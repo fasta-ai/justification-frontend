@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback, useEffect } from "react";
+import { useState, useCallback, useEffect, useMemo } from "react";
 import {
   CheckCircle2,
   XCircle,
@@ -424,16 +424,13 @@ function trimSimilarMatchesForPrompt<
     ...m,
     // The reference seed must be delivered UNTRIMMED so the model sees the
     // full bullet/paragraph structure. Other matches stay capped for cost.
-    Justify:
-      m.IsReferenceSeed
-        ? m.Justify
-        : (m.Justify || "").length > JUSTIFY_MAX_CHARS
-          ? `${(m.Justify || "").slice(0, JUSTIFY_MAX_CHARS)}…`
-          : m.Justify,
+    Justify: m.IsReferenceSeed
+      ? m.Justify
+      : (m.Justify || "").length > JUSTIFY_MAX_CHARS
+        ? `${(m.Justify || "").slice(0, JUSTIFY_MAX_CHARS)}…`
+        : m.Justify,
     Desc:
-      (m.Desc || "").length > 300
-        ? `${(m.Desc || "").slice(0, 300)}…`
-        : m.Desc,
+      (m.Desc || "").length > 300 ? `${(m.Desc || "").slice(0, 300)}…` : m.Desc,
     RejectReason:
       (m.RejectReason || "").length > 400
         ? `${(m.RejectReason || "").slice(0, 400)}…`
@@ -448,6 +445,7 @@ export function Stage3Approval({ onBack, onComplete }: Stage3ApprovalProps) {
     products,
     selectedProducts,
     toggleProductSelection,
+    setSelectedProducts,
     clearSelection,
     updateProduct,
     similarJustifications,
@@ -483,7 +481,7 @@ export function Stage3Approval({ onBack, onComplete }: Stage3ApprovalProps) {
   const { saveCaseData, isLoading: isSavingCaseData } = useSaveCaseData();
 
   // Delete case
-  const { deleteCase, isLoading: isDeletingCase } = useDeleteCase();
+  const { deleteCases, isLoading: isDeletingCase } = useDeleteCase();
 
   const [searchQuery, setSearchQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState<
@@ -552,7 +550,7 @@ export function Stage3Approval({ onBack, onComplete }: Stage3ApprovalProps) {
   const [activeTab, setActiveTab] = useState<
     "eg" | "application" | "catalogue"
   >("eg");
-  const [caseToDelete, setCaseToDelete] = useState<string | null>(null);
+  const [casesToDelete, setCasesToDelete] = useState<string[]>([]);
   const [isDeleteConfirmOpen, setIsDeleteConfirmOpen] = useState(false);
   const [selectedSimilarCases, setSelectedSimilarCases] = useState<string[]>(
     [],
@@ -641,32 +639,57 @@ export function Stage3Approval({ onBack, onComplete }: Stage3ApprovalProps) {
   };
 
   const handleOpenDeleteConfirm = (caseId: string) => {
-    setCaseToDelete(caseId);
+    setCasesToDelete([caseId]);
+    setIsDeleteConfirmOpen(true);
+  };
+
+  const handleOpenBulkDeleteConfirm = () => {
+    if (selectedProducts.length === 0) return;
+    setCasesToDelete([...selectedProducts]);
     setIsDeleteConfirmOpen(true);
   };
 
   const handleConfirmDelete = async () => {
-    if (!caseToDelete) return;
+    if (casesToDelete.length === 0) return;
 
     try {
-      const result = await deleteCase(caseToDelete);
+      const { deletedIds, failed } = await deleteCases(casesToDelete);
 
-      if (!result.success) {
-        alert(`Error deleting case: ${result.error || "Unknown error"}`);
+      if (deletedIds.length > 0) {
+        const deletedSet = new Set(deletedIds);
+        // Remove deleted cases from the list and from the current selection
+        setCases((currentCases) =>
+          currentCases.filter((c) => !deletedSet.has(c.id)),
+        );
+        setSelectedProducts(
+          selectedProducts.filter((id) => !deletedSet.has(id)),
+        );
+      }
+
+      if (failed.length === 0) {
+        toast.success(
+          deletedIds.length === 1
+            ? "Case deleted successfully"
+            : `${deletedIds.length} cases deleted successfully`,
+        );
+        setIsDeleteConfirmOpen(false);
+        setCasesToDelete([]);
         return;
       }
 
-      // Remove the case from the cases list
-      setCases((currentCases) =>
-        currentCases.filter((c) => c.id !== caseToDelete),
+      const failedNumbers = failed.map(
+        (f) => cases.find((c) => c.id === f.id)?.caseNumber ?? f.id,
       );
-
-      setIsDeleteConfirmOpen(false);
-      setCaseToDelete(null);
-      alert("Case deleted successfully");
+      toast.error(
+        deletedIds.length > 0
+          ? `Deleted ${deletedIds.length} case(s); failed to delete ${failed.length}: ${failedNumbers.join(", ")}`
+          : `Failed to delete ${failed.length === 1 ? "case" : `${failed.length} cases`}: ${failed[0].error}`,
+      );
+      // Keep the dialog open with only the failed cases so the user can retry
+      setCasesToDelete(failed.map((f) => f.id));
     } catch (error) {
-      console.error("Error deleting case:", error);
-      alert("Error deleting case");
+      console.error("Error deleting case(s):", error);
+      toast.error("Error deleting case(s)");
     }
   };
 
@@ -777,17 +800,12 @@ export function Stage3Approval({ onBack, onComplete }: Stage3ApprovalProps) {
 
   const pendingProducts = products.filter((p) => p.status === "pending_review");
 
-  const filteredProducts = pendingProducts.filter(
-    (p) =>
-      p.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      p.sku.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      p.category.toLowerCase().includes(searchQuery.toLowerCase()),
-  );
-
   const selectedProductObjects = products.filter((p) =>
     selectedProducts.includes(p.id),
   );
-  const selectedCase = cases.find((caseItem) => caseItem.id === selectedProducts[0]);
+  const selectedCase = cases.find(
+    (caseItem) => caseItem.id === selectedProducts[0],
+  );
 
   const handleSelectDecision = useCallback(
     (decision: "approved" | "rejected") => {
@@ -856,30 +874,32 @@ export function Stage3Approval({ onBack, onComplete }: Stage3ApprovalProps) {
       console.log("Similar matches found:", freshMatches);
 
       // Transform API results to similar justifications format
-      const transformedCases: SimilarJustification[] = freshMatches.map((match) => {
-        const approvalStatus =
-          match.approvalStatus ||
-          match.metadata?.Q12a ||
-          match.metadata?.Q12a_T4 ||
-          "";
-        console.log("approvalStatus", approvalStatus);
-        const decision =
-          approvalStatus === "Yes" || approvalStatus === "Y"
-            ? ("approved" as const)
-            : ("rejected" as const);
+      const transformedCases: SimilarJustification[] = freshMatches.map(
+        (match) => {
+          const approvalStatus =
+            match.approvalStatus ||
+            match.metadata?.Q12a ||
+            match.metadata?.Q12a_T4 ||
+            "";
+          console.log("approvalStatus", approvalStatus);
+          const decision =
+            approvalStatus === "Yes" || approvalStatus === "Y"
+              ? ("approved" as const)
+              : ("rejected" as const);
 
-        return {
-          id: match.id,
-          productName: match.name,
-          category: match.category,
-          decision: decision,
-          justification: match.description || "Similar case found in dataset",
-          similarity: match.similarity,
-          approvalStatus: approvalStatus,
-          metadata: match.metadata,
-          tier: match.tier,
-        };
-      });
+          return {
+            id: match.id,
+            productName: match.name,
+            category: match.category,
+            decision: decision,
+            justification: match.description || "Similar case found in dataset",
+            similarity: match.similarity,
+            approvalStatus: approvalStatus,
+            metadata: match.metadata,
+            tier: match.tier,
+          };
+        },
+      );
 
       setSimilarJustifications(transformedCases);
 
@@ -910,12 +930,7 @@ export function Stage3Approval({ onBack, onComplete }: Stage3ApprovalProps) {
     } finally {
       setIsLoadingSimilarCases(false);
     }
-  }, [
-    selectedProducts,
-    cases,
-    fetchSimilarMatches,
-    setSimilarJustifications,
-  ]);
+  }, [selectedProducts, cases, fetchSimilarMatches, setSimilarJustifications]);
 
   const handleGenerateJustification = useCallback(
     async (decision: "approved" | "rejected") => {
@@ -996,7 +1011,9 @@ export function Stage3Approval({ onBack, onComplete }: Stage3ApprovalProps) {
           );
 
           const currentCase = selectedCase.catalogueData?.products;
-          const appData = trimApplicationForPrompt(selectedCase.applicationData);
+          const appData = trimApplicationForPrompt(
+            selectedCase.applicationData,
+          );
           const caseContext = buildCaseContextForPrompt(
             selectedCase.egData,
             selectedCase.catalogueData,
@@ -1200,15 +1217,14 @@ export function Stage3Approval({ onBack, onComplete }: Stage3ApprovalProps) {
         setIsGeneratingJustification(false);
       }
     },
-    [
-      selectedCase,
-      fetchSimilarMatches,
-      setIsGeneratingJustification,
-    ],
+    [selectedCase, fetchSimilarMatches, setIsGeneratingJustification],
   );
 
   const handleConfirmDecision = useCallback(
-    async (justification: string, explicitDecision?: "approved" | "rejected") => {
+    async (
+      justification: string,
+      explicitDecision?: "approved" | "rejected",
+    ) => {
       const decision = explicitDecision ?? pendingDecision;
       if (!decision || !justification.trim()) return;
 
@@ -1403,19 +1419,104 @@ export function Stage3Approval({ onBack, onComplete }: Stage3ApprovalProps) {
     [selectedCase, saveCaseData, updateCaseStatus, refetchCases, setCases],
   );
 
+  // Cases currently visible in the table (after search/status/date/tranche filters + sort)
+  const visibleCases = useMemo(
+    () =>
+      cases
+        .filter((caseItem) => {
+          // Filter by search query and status
+          const searchLower = searchQuery.toLowerCase();
+          const productName =
+            caseItem.egData?.App_PNam_Mod ||
+            caseItem.applicationData?.PA_PName ||
+            "";
+          const searchMatch =
+            caseItem.caseNumber.toLowerCase().includes(searchLower) ||
+            productName.toLowerCase().includes(searchLower);
+
+          // Filter by status: all, pending, approved, or rejected
+          let statusMatch = true;
+          if (statusFilter === "pending") {
+            statusMatch = caseItem.status === "pending";
+          } else if (statusFilter === "approved") {
+            statusMatch = caseItem.status === "approved";
+          } else if (statusFilter === "rejected") {
+            statusMatch = caseItem.status === "rejected";
+          } else if (statusFilter === "all") {
+            statusMatch = true;
+          }
+
+          // Filter by date range
+          let dateMatch = true;
+          if (startDate || endDate) {
+            if (caseItem.updatedAt) {
+              const caseDateTime = new Date(caseItem.updatedAt).getTime();
+              if (startDate) {
+                const startDateTime = new Date(startDate).getTime();
+                if (caseDateTime < startDateTime) {
+                  dateMatch = false;
+                }
+              }
+              if (endDate) {
+                const endDateTime = new Date(endDate);
+                endDateTime.setHours(23, 59, 59, 999);
+                if (caseDateTime > endDateTime.getTime()) {
+                  dateMatch = false;
+                }
+              }
+            } else {
+              dateMatch = false;
+            }
+          }
+
+          const trancheMatch =
+            trancheFilter === "all" ||
+            String(caseItem.egData?.Tranche) === trancheFilter;
+
+          return searchMatch && statusMatch && dateMatch && trancheMatch;
+        })
+        .sort((a, b) => {
+          if (!sortColumn) return 0;
+          const av = getSortValue(a, sortColumn);
+          const bv = getSortValue(b, sortColumn);
+          let cmp = 0;
+          if (typeof av === "number" && typeof bv === "number") {
+            cmp = av - bv;
+          } else {
+            cmp = String(av).localeCompare(String(bv), undefined, {
+              numeric: true,
+              sensitivity: "base",
+            });
+          }
+          return sortDirection === "asc" ? cmp : -cmp;
+        }),
+    [
+      cases,
+      searchQuery,
+      statusFilter,
+      startDate,
+      endDate,
+      trancheFilter,
+      sortColumn,
+      sortDirection,
+      getSortValue,
+    ],
+  );
+
+  const visibleSelectedCount = useMemo(
+    () => visibleCases.filter((c) => selectedProducts.includes(c.id)).length,
+    [visibleCases, selectedProducts],
+  );
+  const allVisibleSelected =
+    visibleCases.length > 0 && visibleSelectedCount === visibleCases.length;
+
   const handleSelectAll = useCallback(() => {
-    if (selectedProducts.length === filteredProducts.length) {
+    if (allVisibleSelected) {
       clearSelection();
-    } else if (filteredProducts.length > 0) {
-      clearSelection();
-      toggleProductSelection(filteredProducts[0].id);
+    } else {
+      setSelectedProducts(visibleCases.map((c) => c.id));
     }
-  }, [
-    filteredProducts,
-    selectedProducts,
-    clearSelection,
-    toggleProductSelection,
-  ]);
+  }, [allVisibleSelected, visibleCases, clearSelection, setSelectedProducts]);
 
   const handleSelectProduct = useCallback(
     (productId: string) => {
@@ -1568,6 +1669,19 @@ export function Stage3Approval({ onBack, onComplete }: Stage3ApprovalProps) {
                     onChange={(e) => setEndDate(e.target.value)}
                     className="h-9 w-32"
                   />
+                  {selectedProducts.length > 0 && (
+                    <Button
+                      variant="destructive"
+                      size="sm"
+                      onClick={handleOpenBulkDeleteConfirm}
+                      disabled={isDeletingCase}
+                      className="h-9 shrink-0"
+                      title="Delete selected cases"
+                    >
+                      <Trash2 className="w-4 h-4 mr-2" />
+                      Delete ({selectedProducts.length})
+                    </Button>
+                  )}
                   <Button
                     variant="outline"
                     size="icon"
@@ -1614,10 +1728,15 @@ export function Stage3Approval({ onBack, onComplete }: Stage3ApprovalProps) {
                         <TableHead className="w-12 sticky left-0 bg-muted/50 z-10">
                           <Checkbox
                             checked={
-                              selectedProducts.length === cases.length &&
-                              cases.length > 0
+                              allVisibleSelected
+                                ? true
+                                : visibleSelectedCount > 0
+                                  ? "indeterminate"
+                                  : false
                             }
                             onCheckedChange={handleSelectAll}
+                            disabled={visibleCases.length === 0}
+                            aria-label="Select all visible cases"
                           />
                         </TableHead>
                         {/* Priority columns first */}
@@ -1785,286 +1904,204 @@ export function Stage3Approval({ onBack, onComplete }: Stage3ApprovalProps) {
                       </TableRow>
                     </TableHeader>
                     <TableBody>
-                      {cases
-                        .filter((caseItem) => {
-                          // Filter by search query and status
-                          const searchLower = searchQuery.toLowerCase();
-                          const productName =
-                            caseItem.egData?.App_PNam_Mod ||
-                            caseItem.applicationData?.PA_PName ||
-                            "";
-                          const searchMatch =
-                            caseItem.caseNumber
-                              .toLowerCase()
-                              .includes(searchLower) ||
-                            productName.toLowerCase().includes(searchLower);
+                      {visibleCases.map((caseItem) => {
+                        const isSelected = selectedProducts.includes(
+                          caseItem.id,
+                        );
 
-                          // Filter by status: all, pending, approved, or rejected
-                          let statusMatch = true;
-                          if (statusFilter === "pending") {
-                            statusMatch = caseItem.status === "pending";
-                          } else if (statusFilter === "approved") {
-                            statusMatch = caseItem.status === "approved";
-                          } else if (statusFilter === "rejected") {
-                            statusMatch = caseItem.status === "rejected";
-                          } else if (statusFilter === "all") {
-                            statusMatch = true;
-                          }
+                        // Extract product name from egData or applicationData
+                        const productName =
+                          caseItem.egData?.App_PNam_Mod ||
+                          caseItem.applicationData?.PA_PName ||
+                          "—";
 
-                          // Filter by date range
-                          let dateMatch = true;
-                          if (startDate || endDate) {
-                            if (caseItem.updatedAt) {
-                              const caseDateTime = new Date(
-                                caseItem.updatedAt,
-                              ).getTime();
-                              if (startDate) {
-                                const startDateTime = new Date(
-                                  startDate,
-                                ).getTime();
-                                if (caseDateTime < startDateTime) {
-                                  dateMatch = false;
-                                }
-                              }
-                              if (endDate) {
-                                const endDateTime = new Date(endDate);
-                                endDateTime.setHours(23, 59, 59, 999);
-                                if (caseDateTime > endDateTime.getTime()) {
-                                  dateMatch = false;
-                                }
-                              }
-                            } else {
-                              dateMatch = false;
-                            }
-                          }
+                        // Extract ref number from egData
+                        const refNo =
+                          caseItem.egData?.Ref ||
+                          caseItem.egData?.SWD_Ref ||
+                          "—";
 
-                          const trancheMatch =
-                            trancheFilter === "all" ||
-                            String(caseItem.egData?.Tranche) === trancheFilter;
+                        const getData = (key: string) => {
+                          const egVal = caseItem.egData?.[key];
+                          if (
+                            egVal !== undefined &&
+                            egVal !== null &&
+                            egVal !== ""
+                          )
+                            return egVal;
+                          return "—";
+                        };
 
-                          return (
-                            searchMatch &&
-                            statusMatch &&
-                            dateMatch &&
-                            trancheMatch
-                          );
-                        })
-                        .sort((a, b) => {
-                          if (!sortColumn) return 0;
-                          const av = getSortValue(a, sortColumn);
-                          const bv = getSortValue(b, sortColumn);
-                          let cmp = 0;
-                          if (typeof av === "number" && typeof bv === "number") {
-                            cmp = av - bv;
-                          } else {
-                            cmp = String(av).localeCompare(String(bv), undefined, {
-                              numeric: true,
-                              sensitivity: "base",
-                            });
-                          }
-                          return sortDirection === "asc" ? cmp : -cmp;
-                        })
-                        .map((caseItem) => {
-                          const isSelected = selectedProducts.includes(
-                            caseItem.id,
-                          );
+                        const statusColors = {
+                          pending:
+                            "bg-yellow-100 text-yellow-800 border-yellow-300",
+                          approved:
+                            "bg-green-100 text-green-800 border-green-300",
+                          rejected: "bg-red-100 text-red-800 border-red-300",
+                          under_review:
+                            "bg-blue-100 text-blue-800 border-blue-300",
+                        };
 
-                          // Extract product name from egData or applicationData
-                          const productName =
-                            caseItem.egData?.App_PNam_Mod ||
-                            caseItem.applicationData?.PA_PName ||
-                            "—";
-
-                          // Extract ref number from egData
-                          const refNo =
-                            caseItem.egData?.Ref ||
-                            caseItem.egData?.SWD_Ref ||
-                            "—";
-
-                          const getData = (key: string) => {
-                            const egVal = caseItem.egData?.[key];
-                            if (
-                              egVal !== undefined &&
-                              egVal !== null &&
-                              egVal !== ""
-                            )
-                              return egVal;
-                            return "—";
-                          };
-
-                          const statusColors = {
-                            pending:
-                              "bg-yellow-100 text-yellow-800 border-yellow-300",
-                            approved:
-                              "bg-green-100 text-green-800 border-green-300",
-                            rejected: "bg-red-100 text-red-800 border-red-300",
-                            under_review:
-                              "bg-blue-100 text-blue-800 border-blue-300",
-                          };
-
-                          return (
-                            <TableRow
-                              key={caseItem.id}
-                              className={cn(
-                                "cursor-pointer transition-colors",
-                                isSelected && "bg-primary/5",
-                              )}
-                              onClick={() => handleSelectProduct(caseItem.id)}
+                        return (
+                          <TableRow
+                            key={caseItem.id}
+                            className={cn(
+                              "cursor-pointer transition-colors",
+                              isSelected && "bg-primary/5",
+                            )}
+                            onClick={() => handleSelectProduct(caseItem.id)}
+                          >
+                            <TableCell
+                              className="sticky left-0 bg-background z-10"
+                              onClick={(e) => e.stopPropagation()}
                             >
-                              <TableCell
-                                className="sticky left-0 bg-background z-10"
-                                onClick={(e) => e.stopPropagation()}
+                              <Checkbox
+                                checked={isSelected}
+                                onCheckedChange={() =>
+                                  toggleProductSelection(caseItem.id)
+                                }
+                                aria-label={`Select case ${caseItem.caseNumber}`}
+                              />
+                            </TableCell>
+                            {/* Priority columns */}
+                            <TableCell className="font-medium font-mono whitespace-nowrap px-4 bg-primary/5">
+                              {caseItem.caseNumber}
+                            </TableCell>
+                            <TableCell className="whitespace-nowrap px-4 bg-primary/5">
+                              <Badge
+                                variant="outline"
+                                className={statusColors[caseItem.status]}
                               >
-                                <Checkbox
-                                  checked={isSelected}
-                                  onCheckedChange={(checked) => {
-                                    if (checked) {
-                                      handleSelectProduct(caseItem.id);
-                                    } else {
-                                      clearSelection();
-                                    }
+                                {caseItem.status
+                                  .replace("_", " ")
+                                  .toUpperCase()}
+                              </Badge>
+                            </TableCell>
+                            <TableCell className="text-sm whitespace-nowrap px-4 bg-primary/5">
+                              {caseItem.updatedAt
+                                ? new Date(
+                                    caseItem.updatedAt,
+                                  ).toLocaleDateString() +
+                                  " " +
+                                  new Date(
+                                    caseItem.updatedAt,
+                                  ).toLocaleTimeString([], {
+                                    hour: "2-digit",
+                                    minute: "2-digit",
+                                  })
+                                : "—"}
+                            </TableCell>
+                            <TableCell className="font-medium whitespace-nowrap px-4 bg-primary/5">
+                              <span
+                                className="block max-w-[100px] truncate"
+                                title={String(productName)}
+                              >
+                                {productName}
+                              </span>
+                            </TableCell>
+                            <TableCell className="font-mono whitespace-nowrap px-4 bg-primary/5">
+                              {refNo}
+                            </TableCell>
+                            {/* Other EG data columns */}
+                            {[
+                              "App_No",
+                              "Tranche",
+                              "EB_RM",
+                              "NO",
+                              "NO_R",
+                              "Staff1",
+                              "Staff2",
+                              "D_ReqF_SWD",
+                              "D_PlnT_SWD",
+                              "D_EGF_Out",
+                              "D_EGF_Dead",
+                              "SWD_Off_N",
+                              "SWD_Off_P",
+                              "SWD_Off_I",
+                              "App_Type",
+                              "App_Cat",
+                              "Rem_RA",
+                              "Recd_EGF",
+                              "Recd_PAF",
+                              "Recd_Quo",
+                              "Recd_Cat",
+                              "Ret_Rept",
+                              "MRef",
+                              "Req_I_SWD_YN",
+                              "D_ReqT_SWD",
+                              "Req_RepSWD_YN",
+                              "D_RetF_SWD",
+                              "Rem_Req",
+                              "D_WkRep",
+                              "WkRep_Status",
+                              "WkRep_Rem",
+                              "RecdCurrWk_YN",
+                              "EGF_Ready_YN",
+                              "EGF_To_EG_YN",
+                              "D_EGF_T_EG",
+                              "EG_Reply_YN",
+                              "D_EG_Reply",
+                              "Rem_EG",
+                              "EGF_To_SWD_YN",
+                              "D_EGF_ASWD",
+                              "FUF_Comp_YN",
+                              "DatEntry",
+                            ].map((col) => (
+                              <TableCell
+                                key={col}
+                                className="whitespace-nowrap px-4"
+                              >
+                                {getData(col)}
+                              </TableCell>
+                            ))}
+                            {/* Sticky Actions Column */}
+                            <TableCell className="sticky right-0 whitespace-nowrap px-4 bg-background border-l z-20">
+                              <div className="flex items-center gap-1">
+                                <Button
+                                  variant="ghost"
+                                  size="icon"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    setAuditLogCase({
+                                      id: caseItem.id,
+                                      caseNumber: caseItem.caseNumber,
+                                    });
                                   }}
-                                />
-                              </TableCell>
-                              {/* Priority columns */}
-                              <TableCell className="font-medium font-mono whitespace-nowrap px-4 bg-primary/5">
-                                {caseItem.caseNumber}
-                              </TableCell>
-                              <TableCell className="whitespace-nowrap px-4 bg-primary/5">
-                                <Badge
-                                  variant="outline"
-                                  className={statusColors[caseItem.status]}
+                                  className="h-8 w-8"
+                                  title="Audit Log"
                                 >
-                                  {caseItem.status
-                                    .replace("_", " ")
-                                    .toUpperCase()}
-                                </Badge>
-                              </TableCell>
-                              <TableCell className="text-sm whitespace-nowrap px-4 bg-primary/5">
-                                {caseItem.updatedAt
-                                  ? new Date(
-                                      caseItem.updatedAt,
-                                    ).toLocaleDateString() +
-                                    " " +
-                                    new Date(
-                                      caseItem.updatedAt,
-                                    ).toLocaleTimeString([], {
-                                      hour: "2-digit",
-                                      minute: "2-digit",
-                                    })
-                                  : "—"}
-                              </TableCell>
-                              <TableCell className="font-medium whitespace-nowrap px-4 bg-primary/5">
-                                <span
-                                  className="block max-w-[100px] truncate"
-                                  title={String(productName)}
+                                  <History className="h-4 w-4" />
+                                </Button>
+                                <Button
+                                  variant="ghost"
+                                  size="icon"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    handleEditCase(caseItem);
+                                  }}
+                                  className="h-8 w-8"
+                                  title="Edit Case"
                                 >
-                                  {productName}
-                                </span>
-                              </TableCell>
-                              <TableCell className="font-mono whitespace-nowrap px-4 bg-primary/5">
-                                {refNo}
-                              </TableCell>
-                              {/* Other EG data columns */}
-                              {[
-                                "App_No",
-                                "Tranche",
-                                "EB_RM",
-                                "NO",
-                                "NO_R",
-                                "Staff1",
-                                "Staff2",
-                                "D_ReqF_SWD",
-                                "D_PlnT_SWD",
-                                "D_EGF_Out",
-                                "D_EGF_Dead",
-                                "SWD_Off_N",
-                                "SWD_Off_P",
-                                "SWD_Off_I",
-                                "App_Type",
-                                "App_Cat",
-                                "Rem_RA",
-                                "Recd_EGF",
-                                "Recd_PAF",
-                                "Recd_Quo",
-                                "Recd_Cat",
-                                "Ret_Rept",
-                                "MRef",
-                                "Req_I_SWD_YN",
-                                "D_ReqT_SWD",
-                                "Req_RepSWD_YN",
-                                "D_RetF_SWD",
-                                "Rem_Req",
-                                "D_WkRep",
-                                "WkRep_Status",
-                                "WkRep_Rem",
-                                "RecdCurrWk_YN",
-                                "EGF_Ready_YN",
-                                "EGF_To_EG_YN",
-                                "D_EGF_T_EG",
-                                "EG_Reply_YN",
-                                "D_EG_Reply",
-                                "Rem_EG",
-                                "EGF_To_SWD_YN",
-                                "D_EGF_ASWD",
-                                "FUF_Comp_YN",
-                                "DatEntry",
-                              ].map((col) => (
-                                <TableCell
-                                  key={col}
-                                  className="whitespace-nowrap px-4"
+                                  <Edit className="h-4 w-4" />
+                                </Button>
+                                <Button
+                                  variant="ghost"
+                                  size="icon"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    handleOpenDeleteConfirm(caseItem.id);
+                                  }}
+                                  className="h-8 w-8 text-destructive hover:text-destructive hover:bg-destructive/10"
+                                  title="Delete Case"
+                                  disabled={isDeletingCase}
                                 >
-                                  {getData(col)}
-                                </TableCell>
-                              ))}
-                              {/* Sticky Actions Column */}
-                              <TableCell className="sticky right-0 whitespace-nowrap px-4 bg-background border-l z-20">
-                                <div className="flex items-center gap-1">
-                                  <Button
-                                    variant="ghost"
-                                    size="icon"
-                                    onClick={(e) => {
-                                      e.stopPropagation();
-                                      setAuditLogCase({
-                                        id: caseItem.id,
-                                        caseNumber: caseItem.caseNumber,
-                                      });
-                                    }}
-                                    className="h-8 w-8"
-                                    title="Audit Log"
-                                  >
-                                    <History className="h-4 w-4" />
-                                  </Button>
-                                  <Button
-                                    variant="ghost"
-                                    size="icon"
-                                    onClick={(e) => {
-                                      e.stopPropagation();
-                                      handleEditCase(caseItem);
-                                    }}
-                                    className="h-8 w-8"
-                                    title="Edit Case"
-                                  >
-                                    <Edit className="h-4 w-4" />
-                                  </Button>
-                                  <Button
-                                    variant="ghost"
-                                    size="icon"
-                                    onClick={(e) => {
-                                      e.stopPropagation();
-                                      handleOpenDeleteConfirm(caseItem.id);
-                                    }}
-                                    className="h-8 w-8 text-destructive hover:text-destructive hover:bg-destructive/10"
-                                    title="Delete Case"
-                                    disabled={isDeletingCase}
-                                  >
-                                    <Trash2 className="h-4 w-4" />
-                                  </Button>
-                                </div>
-                              </TableCell>
-                            </TableRow>
-                          );
-                        })}
+                                  <Trash2 className="h-4 w-4" />
+                                </Button>
+                              </div>
+                            </TableCell>
+                          </TableRow>
+                        );
+                      })}
                     </TableBody>
                   </Table>
                 </div>
@@ -2578,10 +2615,7 @@ export function Stage3Approval({ onBack, onComplete }: Stage3ApprovalProps) {
           open={isEditModalOpen}
           onOpenChange={(open) => {
             if (!open) {
-              if (
-                isEditDirty &&
-                !window.confirm("Discard unsaved changes?")
-              ) {
+              if (isEditDirty && !window.confirm("Discard unsaved changes?")) {
                 return;
               }
               setIsEditDirty(false);
@@ -2660,10 +2694,7 @@ export function Stage3Approval({ onBack, onComplete }: Stage3ApprovalProps) {
                       return (
                         <div
                           key={field}
-                          className={cn(
-                            "space-y-1",
-                            long && "col-span-3",
-                          )}
+                          className={cn("space-y-1", long && "col-span-3")}
                         >
                           <Label className="text-xs">{field}</Label>
                           {isStaffLabel || isStaffInfo ? (
@@ -2759,10 +2790,7 @@ export function Stage3Approval({ onBack, onComplete }: Stage3ApprovalProps) {
                       return (
                         <div
                           key={field}
-                          className={cn(
-                            "space-y-2",
-                            long && "col-span-2",
-                          )}
+                          className={cn("space-y-2", long && "col-span-2")}
                         >
                           <Label className="text-sm">{field}</Label>
                           {long ? (
@@ -2962,20 +2990,33 @@ export function Stage3Approval({ onBack, onComplete }: Stage3ApprovalProps) {
       >
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Delete Case</AlertDialogTitle>
+            <AlertDialogTitle>
+              {casesToDelete.length > 1
+                ? `Delete ${casesToDelete.length} Cases`
+                : "Delete Case"}
+            </AlertDialogTitle>
             <AlertDialogDescription>
-              Are you sure you want to delete this case? This action cannot be
-              undone.
+              {casesToDelete.length > 1
+                ? `Are you sure you want to delete these ${casesToDelete.length} cases? This action cannot be undone.`
+                : "Are you sure you want to delete this case? This action cannot be undone."}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <DialogFooter>
             <AlertDialogCancel>Cancel</AlertDialogCancel>
             <AlertDialogAction
-              onClick={handleConfirmDelete}
+              onClick={(e) => {
+                // Keep the dialog open while deleting; it closes explicitly on success
+                e.preventDefault();
+                void handleConfirmDelete();
+              }}
               className="bg-destructive hover:bg-destructive/90 text-destructive-foreground"
               disabled={isDeletingCase}
             >
-              {isDeletingCase ? "Deleting..." : "Delete"}
+              {isDeletingCase
+                ? "Deleting..."
+                : casesToDelete.length > 1
+                  ? `Delete ${casesToDelete.length} Cases`
+                  : "Delete"}
             </AlertDialogAction>
           </DialogFooter>
         </AlertDialogContent>
