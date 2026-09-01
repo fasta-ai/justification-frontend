@@ -2,7 +2,7 @@
 
 import type React from "react";
 
-import { useState, useCallback, useEffect } from "react";
+import { useState, useCallback, useEffect, useRef } from "react";
 import {
   Upload,
   FileText,
@@ -170,6 +170,9 @@ function ProductUploadCard({
   }, [product.id]); // Only run when product ID changes (component mount)
 
   // Handle pending catalogue upload when application data becomes available
+  // Guards the retry effect below against launching overlapping uploads.
+  const catalogueInFlight = useRef(false);
+
   const handleCatalogueUploadWithData = useCallback(
     (file: File) => {
       const productName =
@@ -181,14 +184,27 @@ function ProductUploadCard({
         return;
       }
 
+      // Catalogue extraction takes ~25s. The retry effect below re-runs on every
+      // product change, so clearing `pendingCatalogueFile` only once the request
+      // RESOLVED left a 25-second window in which each unrelated update (the
+      // application extract landing, the AI review landing) launched another
+      // duplicate upload. Clear it up front, and hard-block re-entry.
+      if (catalogueInFlight.current) {
+        console.warn("Catalogue extraction already running - ignoring duplicate");
+        return;
+      }
+      catalogueInFlight.current = true;
+      setPendingCatalogueFile(null);
+
       uploadCatalogue(file, productName)
         .then((data) => {
           onUpdate({ catalogueData: data });
-          setPendingCatalogueFile(null);
         })
         .catch((err) => {
           console.error("Failed to upload catalogue:", err);
-          setPendingCatalogueFile(null);
+        })
+        .finally(() => {
+          catalogueInFlight.current = false;
         });
     },
     [product, uploadCatalogue, onUpdate],
