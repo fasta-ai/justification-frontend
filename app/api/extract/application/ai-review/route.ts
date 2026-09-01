@@ -1,4 +1,4 @@
-import { NEXT_PUBLIC_API_URL, PYTHON_BACKEND_URL } from "@/lib/utils";
+import { NEXT_PUBLIC_API_URL } from "@/lib/utils";
 import { NextRequest, NextResponse } from "next/server";
 
 function getAuthHeader(request: NextRequest): string | undefined {
@@ -9,6 +9,12 @@ function getAuthHeader(request: NextRequest): string | undefined {
   return undefined;
 }
 
+/**
+ * Second-pass extraction: rule-based values reconciled with a Gemini opinion on
+ * the fields the parser reads unreliably (beneficiary counts, professional
+ * staff). Slower than /api/extract/application because of the model call, so
+ * the client fires it in the background once the fast result is already shown.
+ */
 export async function POST(request: NextRequest) {
   try {
     const formData = await request.formData();
@@ -18,26 +24,15 @@ export async function POST(request: NextRequest) {
       return Response.json({ error: "No file provided" }, { status: 400 });
     }
 
-    // Forward to backend API.
-    // Only copy a field when it actually has a value: `formData.get()` returns
-    // null for a missing field, and appending that forwards the literal string
-    // "null", which the extractor would treat as a real tranche/season.
     const backendFormData = new FormData();
     backendFormData.append("file", file, file.name);
-
-    for (const field of ["tranche", "season"] as const) {
-      const value = formData.get(field);
-      if (typeof value === "string" && value.trim()) {
-        backendFormData.append(field, value);
-      }
-    }
 
     const authHeader = getAuthHeader(request);
     const headers: Record<string, string> = {};
     if (authHeader) headers.Authorization = authHeader;
 
     const backendResponse = await fetch(
-      `${NEXT_PUBLIC_API_URL}/api/extraction/extract-eg`,
+      `${NEXT_PUBLIC_API_URL}/api/extraction/extract-application-ai-review`,
       {
         method: "POST",
         headers,
@@ -49,14 +44,11 @@ export async function POST(request: NextRequest) {
       throw new Error(`Backend API error: ${backendResponse.statusText}`);
     }
 
-    const result = await backendResponse.text();
-    const parsedData = JSON.parse(result);
-
-    return Response.json(parsedData);
+    return Response.json(await backendResponse.json());
   } catch (error) {
-    console.error("Error in EG form extraction:", error);
+    console.error("Error in application AI review:", error);
     return Response.json(
-      { error: "Failed to extract EG form data" },
+      { error: "Failed to AI-review application data" },
       { status: 500 },
     );
   }

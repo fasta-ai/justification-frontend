@@ -43,13 +43,15 @@ const fileTypes = [
     type: "application",
     label: "Application Form",
     icon: FileText,
-    accept: ".doc,.docx",
+    // .docm: SWD issues these forms macro-enabled, so most real uploads are
+    // .docm rather than .docx. The extractor reads both.
+    accept: ".doc,.docx,.docm",
   },
   {
     type: "eg",
     label: "EG Form",
     icon: FileCheck,
-    accept: ".doc,.docx",
+    accept: ".doc,.docx,.docm",
   },
   {
     type: "catalogue",
@@ -105,6 +107,8 @@ function ProductUploadCard({
     uploadApplicationForm,
     isLoading: isUploadingApplication,
     applicationFormData,
+    aiReview: applicationAiReview,
+    isAiReviewing: isApplicationAiReviewing,
   } = useApplicationUpload();
   const { uploadEGForm, isLoading: isUploadingEG, egFormData } = useEGUpload();
   const {
@@ -243,6 +247,34 @@ function ProductUploadCard({
     },
     [uploadApplicationForm, onUpdate],
   );
+
+  // The AI review NEVER writes a value. Neither source is authoritative - the
+  // parser has shipped label-contaminated values, and the model has read the
+  // wrong section of the form - so a disagreement is shown to the reviewer and
+  // they decide. Dismissed suggestions are remembered so they stay dismissed.
+  const [dismissedSuggestions, setDismissedSuggestions] = useState<
+    Record<string, boolean>
+  >({});
+
+  const openSuggestions = Object.entries(
+    applicationAiReview?.suggestions ?? {},
+  ).filter(([field]) => !dismissedSuggestions[field]);
+
+  const acceptSuggestion = useCallback(
+    (field: string, value: any) => {
+      setEditableAppData((prev) => {
+        const merged = { ...prev, [field]: value };
+        onUpdate({ applicationData: { data: merged } });
+        return merged;
+      });
+      setDismissedSuggestions((prev) => ({ ...prev, [field]: true }));
+    },
+    [onUpdate],
+  );
+
+  const dismissSuggestion = useCallback((field: string) => {
+    setDismissedSuggestions((prev) => ({ ...prev, [field]: true }));
+  }, []);
 
   const handleEGUpload = useCallback(
     (file: File) => {
@@ -985,6 +1017,81 @@ function ProductUploadCard({
                             Application Data
                           </TableCell>
                         </TableRow>
+
+                        {/* AI second opinion. Advisory only: nothing here has
+                            been applied to the values above. */}
+                        {isApplicationAiReviewing && (
+                          <TableRow>
+                            <TableCell
+                              colSpan={2}
+                              className="text-[11px] text-muted-foreground italic"
+                            >
+                              AI cross-check running…
+                            </TableCell>
+                          </TableRow>
+                        )}
+                        {openSuggestions.length > 0 && (
+                          <TableRow>
+                            <TableCell colSpan={2} className="p-0">
+                              <div className="border-l-2 border-amber-400 bg-amber-50/60 dark:bg-amber-950/20 px-3 py-2 space-y-2">
+                                <p className="text-[11px] font-semibold text-amber-900 dark:text-amber-300">
+                                  AI read {openSuggestions.length} field
+                                  {openSuggestions.length === 1 ? "" : "s"}{" "}
+                                  differently — nothing has been changed
+                                </p>
+                                {openSuggestions.map(([field, s]) => (
+                                  <div
+                                    key={field}
+                                    className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px]"
+                                  >
+                                    <span className="font-medium">{field}</span>
+                                    <Badge
+                                      variant={
+                                        s.kind === "conflict"
+                                          ? "destructive"
+                                          : "secondary"
+                                      }
+                                      className="px-1 py-0 text-[10px]"
+                                    >
+                                      {s.kind}
+                                    </Badge>
+                                    <span className="text-muted-foreground">
+                                      current
+                                    </span>
+                                    <code className="rounded bg-background px-1">
+                                      {String(s.current ?? "/") || "/"}
+                                    </code>
+                                    <span className="text-muted-foreground">
+                                      AI
+                                    </span>
+                                    <code className="rounded bg-background px-1">
+                                      {String(s.suggested)}
+                                    </code>
+                                    <Button
+                                      size="sm"
+                                      variant="outline"
+                                      className="h-5 px-2 text-[10px]"
+                                      onClick={() =>
+                                        acceptSuggestion(field, s.suggested)
+                                      }
+                                    >
+                                      Use AI value
+                                    </Button>
+                                    <Button
+                                      size="sm"
+                                      variant="ghost"
+                                      className="h-5 px-2 text-[10px]"
+                                      onClick={() => dismissSuggestion(field)}
+                                    >
+                                      Keep current
+                                    </Button>
+                                  </div>
+                                ))}
+                              </div>
+                            </TableCell>
+                          </TableRow>
+                        )}
+
                         <TableRow>
                           <TableCell className="text-xs font-medium text-muted-foreground">
                             Reference

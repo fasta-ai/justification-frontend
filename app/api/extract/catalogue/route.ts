@@ -18,9 +18,18 @@ export async function POST(request: NextRequest) {
       return Response.json({ error: "No file provided" }, { status: 400 });
     }
 
-    // Forward to backend API
+    // Forward to backend API.
+    // productName must be forwarded explicitly: this proxy builds a fresh
+    // FormData rather than passing the original through, so anything not
+    // copied here is silently dropped. It was, which meant the extractor ran
+    // with no product name at all.
     const backendFormData = new FormData();
     backendFormData.append("file", file, file.name);
+
+    const productName = formData.get("productName");
+    if (typeof productName === "string" && productName.trim()) {
+      backendFormData.append("productName", productName);
+    }
 
     const authHeader = getAuthHeader(request);
     const headers: Record<string, string> = {};

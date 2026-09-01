@@ -36,7 +36,9 @@ interface ExtractedEGData {
 }
 
 const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB
-const ALLOWED_EXTENSIONS = [".doc", ".docx"];
+// .docm is included because SWD issues these forms macro-enabled; the Python
+// extractor reads the document body of .docm and .docx identically.
+const ALLOWED_EXTENSIONS = [".doc", ".docx", ".docm"];
 
 function validateFile(file: File): string | null {
   const ext = file.name.slice(file.name.lastIndexOf(".")).toLowerCase();
@@ -418,7 +420,7 @@ function EGUploadPage() {
                     <input
                       ref={fileInputRef}
                       type="file"
-                      accept=".doc,.docx"
+                      accept=".doc,.docx,.docm"
                       className="hidden"
                       onChange={handleFileChange}
                       data-testid="file-input"
@@ -437,7 +439,7 @@ function EGUploadPage() {
                           Click or drag to upload EG form file
                         </p>
                         <p className="text-xs text-muted-foreground mt-1">
-                          Supported: .doc, .docx (max 10MB)
+                          Supported: {ALLOWED_EXTENSIONS.join(", ")} (max 10MB)
                         </p>
                       </div>
                     )}

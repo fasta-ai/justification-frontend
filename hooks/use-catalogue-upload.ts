@@ -15,7 +15,11 @@ export function useCatalogueUpload() {
         const formData = new FormData();
         formData.append("file", file);
         formData.append("productName", productName);
-        const response = await fetch(`${CLOUDFRONT_URL}/extract/catalogue`, {
+        // const response = await fetch(`${CLOUDFRONT_URL}/extract/catalogue`, {
+        //   method: "POST",
+        //   body: formData,
+        // });
+        const response = await fetch(`/api/extract/catalogue`, {
           method: "POST",
           body: formData,
         });
