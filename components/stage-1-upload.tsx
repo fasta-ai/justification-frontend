@@ -75,6 +75,8 @@ interface ProductUploadCardProps {
   onToggleExpand: () => void;
   commonTranch: string;
   commonSeason: string;
+  /** Reports which extractions are running, so Stage 1 can total them up. */
+  onBusyChange?: (productId: string, running: string[]) => void;
 }
 
 function ProductUploadCard({
@@ -85,6 +87,7 @@ function ProductUploadCard({
   onToggleExpand,
   commonTranch,
   commonSeason,
+  onBusyChange,
 }: ProductUploadCardProps) {
   console.log("product", product);
   const [showExtractedPreview, setShowExtractedPreview] = useState(false);
@@ -190,7 +193,9 @@ function ProductUploadCard({
       // application extract landing, the AI review landing) launched another
       // duplicate upload. Clear it up front, and hard-block re-entry.
       if (catalogueInFlight.current) {
-        console.warn("Catalogue extraction already running - ignoring duplicate");
+        console.warn(
+          "Catalogue extraction already running - ignoring duplicate",
+        );
         return;
       }
       catalogueInFlight.current = true;
@@ -220,6 +225,45 @@ function ProductUploadCard({
     pendingCatalogueFile,
     handleCatalogueUploadWithData,
   ]);
+
+  // Everything currently in flight for this product, newest concern first.
+  // Named for what the reviewer is waiting on, not the internal call.
+  const runningWork = [
+    isUploadingApplication && "Application form",
+    isUploadingEG && "EG form",
+    isUploadingCatalogue && "Catalogue",
+    pendingCatalogueFile && !isUploadingCatalogue
+      ? "Catalogue (waiting for product name)"
+      : null,
+    isApplicationAiReviewing && "AI cross-check",
+  ].filter(Boolean) as string[];
+
+  // One entry per required document, so the indicator can show WHICH document
+  // is done or running rather than just a total.
+  const docStates = [
+    {
+      label: "Application form",
+      done: !!product.applicationData?.data,
+      running: isUploadingApplication,
+    },
+    {
+      label: "EG form",
+      done: !!product.egData?.data,
+      running: isUploadingEG,
+    },
+    {
+      label: "Catalogue",
+      done: !!product.catalogueData?.data,
+      running: isUploadingCatalogue || !!pendingCatalogueFile,
+    },
+  ];
+  const documentsDone = docStates.filter((d) => d.done).length;
+  const documentsExpected = docStates.length;
+
+  const busyKey = runningWork.join("|");
+  useEffect(() => {
+    onBusyChange?.(product.id, busyKey ? busyKey.split("|") : []);
+  }, [product.id, busyKey, onBusyChange]);
 
   const handleApplyExtractedData = useCallback(() => {
     // if (extractedData) {
@@ -386,8 +430,8 @@ function ProductUploadCard({
   console.log("edibleAppData", editableAppData);
 
   return (
-    <Card className="border-border/50 shadow-sm hover:shadow-md transition-shadow">
-      <CardHeader className="pb-3">
+    <Card className="border-border/50 shadow-sm hover:shadow-md transition-shadow gap-0">
+      <CardHeader className="pb-3 relative">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-3 flex-1">
             <div className="w-10 h-10 rounded-lg bg-primary/10 flex items-center justify-center">
@@ -413,6 +457,42 @@ function ProductUploadCard({
             </div>
           </div>
           <div className="flex items-center gap-2">
+            {/* One dot per required document, inline in a row that already
+                exists: filled = extracted, pulsing = running, hollow = not yet.
+                No bar, no divider, no reserved height. */}
+            <span
+              className="flex items-center gap-1"
+              title={docStates
+                .map(
+                  (d) =>
+                    `${d.label}: ${d.running ? "processing…" : d.done ? "done" : "not yet"}`,
+                )
+                .join("\n")}
+            >
+              {docStates.map((d) => (
+                <span
+                  key={d.label}
+                  className={cn(
+                    "inline-block h-1.5 w-1.5 rounded-full",
+                    d.running
+                      ? "bg-primary animate-pulse"
+                      : d.done
+                        ? "bg-primary"
+                        : "bg-muted-foreground/25",
+                  )}
+                />
+              ))}
+              <span
+                className={cn(
+                  "ml-0.5 text-[11px] tabular-nums",
+                  runningWork.length > 0
+                    ? "text-primary font-medium"
+                    : "text-muted-foreground",
+                )}
+              >
+                {documentsDone}/{documentsExpected}
+              </span>
+            </span>
             <Button
               variant="ghost"
               size="icon"
@@ -1618,6 +1698,81 @@ export function Stage1Upload({ onNext }: Stage1UploadProps) {
     );
   }, []);
 
+  // What each card currently has in flight, keyed by product id.
+  const [busyByProduct, setBusyByProduct] = useState<Record<string, string[]>>(
+    {},
+  );
+
+  // Stable identity: a new function each render would re-fire the reporting
+  // effect inside every card on every parent render.
+  const handleBusyChange = useCallback(
+    (productId: string, running: string[]) => {
+      setBusyByProduct((prev) => {
+        const before = prev[productId] ?? [];
+        if (
+          before.length === running.length &&
+          before.every((v, i) => v === running[i])
+        ) {
+          return prev; // no change - don't trigger a pointless re-render
+        }
+        return { ...prev, [productId]: running };
+      });
+    },
+    [],
+  );
+
+  // Every product is exactly one of these three, so they sum to the total -
+  // which is why a separate "Products" count is redundant.
+  const productStats = products.reduce(
+    (acc, p) => {
+      const isRunning = (busyByProduct[p.id] ?? []).length > 0;
+      const isComplete =
+        !!p.applicationData?.data &&
+        !!p.egData?.data &&
+        !!p.catalogueData?.data;
+      if (isRunning) acc.inProgress += 1;
+      else if (isComplete) acc.completed += 1;
+      else acc.pending += 1;
+      return acc;
+    },
+    { inProgress: 0, completed: 0, pending: 0 },
+  );
+
+  // Leaving Stage 1 loses every uploaded file and everything extracted from it:
+  // nothing here is persisted until cases are created in Step 2.
+  const hasUnsavedWork = products.length > 0;
+  useEffect(() => {
+    if (!hasUnsavedWork) return;
+    const onBeforeUnload = (e: BeforeUnloadEvent) => {
+      e.preventDefault();
+      e.returnValue = "";
+      return "";
+    };
+    window.addEventListener("beforeunload", onBeforeUnload);
+    return () => window.removeEventListener("beforeunload", onBeforeUnload);
+  }, [hasUnsavedWork]);
+
+  // The browser Back button would otherwise silently discard the whole stage.
+  // Push a sentinel entry so Back lands here first and can be confirmed.
+  useEffect(() => {
+    if (!hasUnsavedWork) return;
+    window.history.pushState(null, "", window.location.href);
+    const onPopState = () => {
+      const leave = window.confirm(
+        "Leave this page? Your uploaded documents and everything extracted " +
+          "from them will be lost — they are only saved once you create cases " +
+          "in the next step.",
+      );
+      if (!leave) {
+        window.history.pushState(null, "", window.location.href);
+      } else {
+        window.history.back();
+      }
+    };
+    window.addEventListener("popstate", onPopState);
+    return () => window.removeEventListener("popstate", onPopState);
+  }, [hasUnsavedWork]);
+
   const canProceed =
     products.length > 0 &&
     products.every((p) => {
@@ -1627,50 +1782,76 @@ export function Stage1Upload({ onNext }: Stage1UploadProps) {
       );
     });
 
-  const totalFiles = products.reduce(
-    (acc, p) => acc + p.files.filter((f) => f.status === "uploaded").length,
-    0,
-  );
-
   console.log("Products:", products);
 
   return (
-    <div className="space-y-6">
-      <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
-        <div>
-          <h2 className="text-2xl font-bold text-foreground">
-            Upload Products
-          </h2>
-          <p className="text-muted-foreground mt-1">
-            Add products and their associated files for processing
-          </p>
+    <div className="space-y-4">
+      <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
+        {/* Title only - the old subtitle restated what the stage already says. */}
+        <h2 className="text-xl font-bold text-foreground">Upload Products</h2>
+        <div className="flex items-center gap-3">
+          {products.length > 0 && (
+            <div className="flex items-center gap-3 text-xs">
+              <span
+                className={cn(
+                  "flex items-center gap-1.5 tabular-nums",
+                  productStats.inProgress > 0
+                    ? "text-primary font-medium"
+                    : "text-muted-foreground",
+                )}
+              >
+                {productStats.inProgress > 0 && (
+                  <span className="inline-block h-1.5 w-1.5 rounded-full bg-primary animate-pulse" />
+                )}
+                {productStats.inProgress} in progress
+              </span>
+              <span className="text-muted-foreground tabular-nums">
+                {productStats.completed} complete
+              </span>
+              <span className="text-muted-foreground tabular-nums">
+                {productStats.pending} pending
+              </span>
+            </div>
+          )}
+          <Button onClick={handleAddProduct} className="gap-2">
+            <Plus className="w-4 h-4" />
+            Add Product
+          </Button>
         </div>
-        <Button onClick={handleAddProduct} className="gap-2">
-          <Plus className="w-4 h-4" />
-          Add Product
-        </Button>
       </div>
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        <div className="space-y-2">
-          <Label htmlFor="common-season">
-            Season (applies to all products)
+      {/* Labels sit beside their inputs rather than stacked above, which drops
+          a whole row. "applies to all products" moves to the tooltip. */}
+      <div className="grid grid-cols-1 gap-2 md:grid-cols-2 md:gap-4">
+        <div className="flex items-center gap-2">
+          <Label
+            htmlFor="common-season"
+            title="Applies to all products"
+            className="w-16 shrink-0 text-xs text-muted-foreground"
+          >
+            Season
           </Label>
           <Input
             id="common-season"
             value={commonSeason}
             onChange={(e) => setCommonSeason(e.target.value)}
             placeholder="e.g., Spring 2026"
+            className="h-8 text-sm"
           />
         </div>
-        <div className="space-y-2">
-          <Label htmlFor="common-tranch">
-            Tranche (applies to all products)
+        <div className="flex items-center gap-2">
+          <Label
+            htmlFor="common-tranch"
+            title="Applies to all products"
+            className="w-16 shrink-0 text-xs text-muted-foreground"
+          >
+            Tranche
           </Label>
           <Input
             id="common-tranch"
             value={commonTranch}
             onChange={(e) => setCommonTranch(e.target.value)}
             placeholder="e.g., Tranche A"
+            className="h-8 text-sm"
           />
         </div>
       </div>
@@ -1721,21 +1902,6 @@ export function Stage1Upload({ onNext }: Stage1UploadProps) {
         </CardContent>
       </Card> */}
 
-      {products.length > 0 && (
-        <div className="flex items-center gap-4 p-4 bg-muted/50 rounded-lg">
-          <div className="flex items-center gap-2">
-            <span className="text-sm text-muted-foreground">Products:</span>
-            <Badge variant="secondary">{products.length}</Badge>
-          </div>
-          <div className="flex items-center gap-2">
-            <span className="text-sm text-muted-foreground">
-              Files Uploaded:
-            </span>
-            <Badge variant="secondary">{totalFiles}</Badge>
-          </div>
-        </div>
-      )}
-
       {products.length === 0 ? (
         <Card className="border-dashed border-2">
           <CardContent className="flex flex-col items-center justify-center py-16">
@@ -1767,6 +1933,7 @@ export function Stage1Upload({ onNext }: Stage1UploadProps) {
               onToggleExpand={() => toggleExpand(product.id)}
               commonTranch={commonTranch}
               commonSeason={commonSeason}
+              onBusyChange={handleBusyChange}
             />
           ))}
         </div>

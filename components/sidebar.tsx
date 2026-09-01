@@ -15,8 +15,17 @@ import {
 } from "lucide-react";
 import Image from "next/image";
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
+import { useState } from "react";
 import { useProductStore } from "@/lib/store";
+import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 
 interface SidebarProps {
   mobileMenuOpen: boolean;
@@ -24,15 +33,44 @@ interface SidebarProps {
 }
 
 export function Sidebar({ mobileMenuOpen, setMobileMenuOpen }: SidebarProps) {
-  const { currentStage, setStage } = useProductStore();
+  const { currentStage, setStage, products, workflowMode, setWorkflowMode } =
+    useProductStore();
   const pathname = usePathname();
+  const router = useRouter();
+  const [showLeaveDialog, setShowLeaveDialog] = useState(false);
+
+  // Steps 1 and 2 hold work that exists only in this browser session: uploaded
+  // files and extracted data are not written anywhere until Step 2 creates the
+  // cases. Step 3 is past that point, so it needs no warning.
+  const hasUnsavedWork =
+    workflowMode !== null && products.length > 0 && currentStage < 3;
+
+  const goHome = () => {
+    setWorkflowMode(null);
+    setStage(1);
+    setMobileMenuOpen(false);
+    if (pathname !== "/") router.push("/");
+  };
+
+  const handleLogoClick = () => {
+    if (hasUnsavedWork) {
+      setShowLeaveDialog(true);
+      return;
+    }
+    goHome();
+  };
 
   return (
     <>
       {/* Slim Sidebar */}
       <aside className="w-20 bg-card border-r hidden md:flex flex-col items-center py-4 gap-4">
-        <div className="w-12 h-12 flex items-center justify-center mb-4">
-          {/* <Package className="w-6 h-6 text-primary" /> */}
+        <button
+          type="button"
+          onClick={handleLogoClick}
+          title="Back to dashboard"
+          aria-label="Back to dashboard"
+          className="w-12 h-12 flex items-center justify-center mb-4 rounded-lg transition-colors hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        >
           <Image
             src="/images/hkscss-logo.svg"
             alt="HKCSS Logo"
@@ -40,7 +78,7 @@ export function Sidebar({ mobileMenuOpen, setMobileMenuOpen }: SidebarProps) {
             height={80}
             className="object-contain"
           />
-        </div>
+        </button>
         <nav className="flex flex-col gap-3">
           <Link
             href="/"
@@ -257,6 +295,43 @@ export function Sidebar({ mobileMenuOpen, setMobileMenuOpen }: SidebarProps) {
           </aside>
         </div>
       )}
+
+      <Dialog open={showLeaveDialog} onOpenChange={setShowLeaveDialog}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Leave this workflow?</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-2 text-sm text-muted-foreground">
+            <p>
+              You have {products.length} product
+              {products.length === 1 ? "" : "s"} in progress
+              {currentStage === 1
+                ? " with uploaded documents."
+                : " that have not been saved as cases yet."}
+            </p>
+            <p>
+              Nothing here is stored on the server until you press{" "}
+              <strong className="text-foreground">Save Cases</strong> in Step 2.
+              Until then it lives only in this browser, so refreshing or closing
+              the tab will lose it.
+            </p>
+          </div>
+          <DialogFooter className="flex-col gap-2 sm:flex-row">
+            <Button variant="outline" onClick={() => setShowLeaveDialog(false)}>
+              Stay in workflow
+            </Button>
+            <Button
+              variant="destructive"
+              onClick={() => {
+                setShowLeaveDialog(false);
+                goHome();
+              }}
+            >
+              Go to dashboard
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </>
   );
 }

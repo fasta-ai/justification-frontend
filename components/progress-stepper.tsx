@@ -31,61 +31,59 @@ export function ProgressStepper({
     : stages;
 
   return (
-    <div className="w-full py-6">
-      <div className="flex items-center justify-between">
+    // Compact: circle and label share one line, so the whole stepper is one
+    // row (~40px) instead of a stacked block. The step description moves to a
+    // tooltip - it is orientation, not something to keep on screen.
+    <div className="w-full py-2">
+      <div className="flex items-center justify-between gap-2">
         {displayStages.map((stage, index) => {
           const isCompleted = currentStage > stage.id;
           const isCurrent = currentStage === stage.id;
           const isClickable = stage.id <= currentStage;
 
           return (
-            <div key={stage.id} className="flex items-center flex-1">
-              <div className="flex flex-col items-center flex-1">
-                <button
-                  onClick={() =>
-                    isClickable && onStageClick?.(stage.id as Stage)
-                  }
-                  disabled={!isClickable}
+            <div key={stage.id} className="flex items-center gap-2 min-w-0">
+              <button
+                onClick={() => isClickable && onStageClick?.(stage.id as Stage)}
+                disabled={!isClickable}
+                title={`${stage.label} — ${stage.description}`}
+                className={cn(
+                  "flex items-center gap-2 rounded-full py-0.5 pr-2 pl-0.5 transition-colors",
+                  isClickable && "cursor-pointer hover:bg-muted",
+                  !isClickable && "cursor-default",
+                )}
+              >
+                <span
                   className={cn(
-                    "flex items-center justify-center w-12 h-12 rounded-full border-2 transition-all duration-300",
+                    "flex h-6 w-6 shrink-0 items-center justify-center rounded-full border-2 text-[11px] font-semibold transition-colors",
                     isCompleted &&
                       "bg-primary border-primary text-primary-foreground",
                     isCurrent && "border-primary bg-primary/10 text-primary",
                     !isCompleted &&
                       !isCurrent &&
                       "border-muted-foreground/30 text-muted-foreground/50",
-                    isClickable && "cursor-pointer hover:scale-105",
                   )}
                 >
-                  {isCompleted ? (
-                    <Check className="w-6 h-6" />
-                  ) : (
-                    <span className="text-lg font-semibold">{stage.id}</span>
+                  {isCompleted ? <Check className="h-3.5 w-3.5" /> : stage.id}
+                </span>
+                <span
+                  className={cn(
+                    "truncate text-sm font-medium",
+                    isCurrent
+                      ? "text-primary"
+                      : isCompleted
+                        ? "text-foreground"
+                        : "text-muted-foreground",
                   )}
-                </button>
-                <div className="mt-3 text-center">
-                  <p
-                    className={cn(
-                      "font-medium text-sm",
-                      isCurrent
-                        ? "text-primary"
-                        : isCompleted
-                          ? "text-foreground"
-                          : "text-muted-foreground",
-                    )}
-                  >
-                    {stage.label}
-                  </p>
-                  <p className="text-xs text-muted-foreground mt-0.5 hidden sm:block">
-                    {stage.description}
-                  </p>
-                </div>
-              </div>
+                >
+                  {stage.label}
+                </span>
+              </button>
 
               {index < displayStages.length - 1 && (
                 <div
                   className={cn(
-                    "h-0.5 flex-1 mx-4 transition-colors duration-300",
+                    "hidden h-0.5 w-8 shrink-0 transition-colors sm:block lg:w-16",
                     currentStage > stage.id ? "bg-primary" : "bg-border",
                   )}
                 />
