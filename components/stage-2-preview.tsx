@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback, useEffect } from "react";
+import { useState, useCallback, useEffect, useRef } from "react";
 import { utils, writeFile } from "xlsx";
 import {
   Edit2,
@@ -461,6 +461,31 @@ export function Stage2Preview({ onNext, onBack }: Stage2PreviewProps) {
   const [confirmedProducts, setConfirmedProducts] = useState<Set<string>>(
     new Set(),
   );
+  // Products are confirmed by default so the Save / Continue actions are live
+  // as soon as the reviewer arrives. This tracks which ids have already been
+  // auto-confirmed once, so deliberately unconfirming one is not undone the
+  // next time the product list changes.
+  const autoConfirmed = useRef<Set<string>>(new Set());
+
+  // Dirty tracking. `status` is excluded because saving flips it to
+  // pending_review, which would otherwise register as a fresh edit.
+  const snapshotOf = useCallback(
+    (list: Product[]) =>
+      JSON.stringify(
+        list.map(
+          ({ status, ...rest }: Product) => rest as Omit<Product, "status">,
+        ),
+      ),
+    [],
+  );
+  const [lastSavedSnapshot, setLastSavedSnapshot] = useState<string | null>(
+    null,
+  );
+  const hasUnsavedChanges =
+    products.length > 0 && snapshotOf(products) !== lastSavedSnapshot;
+
+  const [showUnsavedDialog, setShowUnsavedDialog] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
   const [activeTableTab, setActiveTableTab] = useState<"a_record" | "pa_admin">(
     "a_record",
   );
@@ -482,6 +507,29 @@ export function Stage2Preview({ onNext, onBack }: Stage2PreviewProps) {
     "PA_Elaborate",
     "PA_Justify",
   ];
+
+  // Confirm every newly-seen product by default.
+  useEffect(() => {
+    const unseen = products
+      .map((p) => p.id)
+      .filter((id) => !autoConfirmed.current.has(id));
+    if (unseen.length === 0) return;
+    unseen.forEach((id) => autoConfirmed.current.add(id));
+    setConfirmedProducts((prev) => new Set([...prev, ...unseen]));
+  }, [products]);
+
+  // Warn on tab close / refresh while there is unsaved work. Browsers ignore
+  // custom text here and show their own wording; returnValue must still be set.
+  useEffect(() => {
+    if (!hasUnsavedChanges) return;
+    const onBeforeUnload = (e: BeforeUnloadEvent) => {
+      e.preventDefault();
+      e.returnValue = "";
+      return "";
+    };
+    window.addEventListener("beforeunload", onBeforeUnload);
+    return () => window.removeEventListener("beforeunload", onBeforeUnload);
+  }, [hasUnsavedChanges]);
 
   const handleDelete = useCallback(
     (productId: string, productName: string) => {
@@ -564,7 +612,11 @@ export function Stage2Preview({ onNext, onBack }: Stage2PreviewProps) {
     [editingProduct, updateProduct],
   );
 
-  const handleProceed = useCallback(async () => {
+  // Saving is split from navigating so the reviewer can save without leaving
+  // the page - previously the only way to persist was "Continue to Approval",
+  // which is easy to miss. Returns true when everything was created.
+  const saveCases = useCallback(async (): Promise<boolean> => {
+    setIsSaving(true);
     try {
       // Get all confirmed products
       const confirmedProductsList = products.filter((p) =>
@@ -573,7 +625,7 @@ export function Stage2Preview({ onNext, onBack }: Stage2PreviewProps) {
 
       if (confirmedProductsList.length === 0) {
         alert("Please confirm at least one product before proceeding.");
-        return;
+        return false;
       }
 
       console.log(
@@ -622,13 +674,37 @@ export function Stage2Preview({ onNext, onBack }: Stage2PreviewProps) {
         updateProduct(p.id, { status: "pending_review" });
       });
 
-      // Proceed to next stage
-      onNext();
+      // Mark this state as saved so the unsaved-changes guard stands down.
+      setLastSavedSnapshot(snapshotOf(products));
+      // A partial failure still counts as attempted. The warning above tells
+      // the reviewer, and blocking here would invite a second click that
+      // re-creates every case that DID succeed - createCase is not idempotent.
+      // This matches the behaviour before Save was split out of Continue.
+      return true;
     } catch (error) {
       console.error("Error creating cases:", error);
       alert("An error occurred while creating cases. Please try again.");
+      return false;
+    } finally {
+      setIsSaving(false);
     }
-  }, [products, confirmedProducts, createCase, updateProduct, onNext]);
+  }, [products, confirmedProducts, createCase, updateProduct, snapshotOf]);
+
+  const handleProceed = useCallback(async () => {
+    if (await saveCases()) {
+      onNext();
+    }
+  }, [saveCases, onNext]);
+
+  // Back is intercepted: leaving with unsaved work is the exact mistake this
+  // screen keeps producing, so make it a deliberate choice.
+  const handleBackClick = useCallback(() => {
+    if (hasUnsavedChanges) {
+      setShowUnsavedDialog(true);
+      return;
+    }
+    onBack();
+  }, [hasUnsavedChanges, onBack]);
 
   const handleExportExcel = useCallback(() => {
     // Helper function to get data (same logic as table display)
@@ -1174,35 +1250,145 @@ export function Stage2Preview({ onNext, onBack }: Stage2PreviewProps) {
         onSave={handleSaveEdit}
       />
 
-      <div className="flex items-center justify-between pt-4 border-t">
+      {/* Sticky so Save and Continue are always on screen - reviewers were
+          scrolling past them on long product lists and losing their work. */}
+      <div className="sticky bottom-0 z-10 -mx-1 flex flex-col gap-3 border-t bg-background/95 px-1 py-3 backdrop-blur supports-[backdrop-filter]:bg-background/80 sm:flex-row sm:items-center sm:justify-between">
         <Button
           variant="outline"
-          onClick={onBack}
+          onClick={handleBackClick}
           className="gap-2 bg-transparent"
-          disabled={isCreatingCases}
+          disabled={isCreatingCases || isSaving}
         >
           <ChevronLeft className="w-4 h-4" />
           Back to Upload
         </Button>
-        <Button
-          onClick={handleProceed}
-          disabled={confirmedProducts.size === 0 || isCreatingCases}
-          size="lg"
-          className="gap-2"
-        >
-          {isCreatingCases ? (
-            <>
-              <Loader2 className="w-4 h-4 animate-spin" />
-              Creating Cases...
-            </>
+
+        <div className="flex flex-wrap items-center gap-2">
+          {hasUnsavedChanges ? (
+            <span className="mr-1 text-xs font-medium text-amber-600 dark:text-amber-400">
+              Unsaved changes
+            </span>
           ) : (
-            <>
-              Continue to Approval
-              <ChevronRight className="w-4 h-4" />
-            </>
+            lastSavedSnapshot !== null && (
+              <span className="mr-1 text-xs text-muted-foreground">
+                All changes saved
+              </span>
+            )
           )}
-        </Button>
+          <Button
+            variant="outline"
+            onClick={handleExportExcel}
+            className="gap-2 bg-transparent"
+            disabled={isCreatingCases || isSaving}
+          >
+            <Download className="w-4 h-4" />
+            Download Excel
+          </Button>
+          {/* <Button
+            variant="secondary"
+            onClick={() => void saveCases()}
+            disabled={
+              confirmedProducts.size === 0 || isCreatingCases || isSaving
+            }
+            className="gap-2"
+          >
+            {isSaving ? (
+              <>
+                <Loader2 className="w-4 h-4 animate-spin" />
+                Saving...
+              </>
+            ) : (
+              <>
+                <Check className="w-4 h-4" />
+                Save Cases
+              </>
+            )}
+          </Button> */}
+          <Button
+            onClick={handleProceed}
+            disabled={
+              confirmedProducts.size === 0 || isCreatingCases || isSaving
+            }
+            size="lg"
+            className="gap-2"
+          >
+            {isCreatingCases || isSaving ? (
+              <>
+                <Loader2 className="w-4 h-4 animate-spin" />
+                Creating Cases...
+              </>
+            ) : (
+              <>
+                Continue to Approval
+                <ChevronRight className="w-4 h-4" />
+              </>
+            )}
+          </Button>
+        </div>
       </div>
+
+      <Dialog open={showUnsavedDialog} onOpenChange={setShowUnsavedDialog}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>You have unsaved changes</DialogTitle>
+          </DialogHeader>
+          <p className="text-sm text-muted-foreground">
+            Your edits to {products.length} product
+            {products.length === 1 ? "" : "s"} have not been saved as cases. If
+            you go back now they will be lost. You can save them, download a
+            copy as Excel, or discard them.
+          </p>
+          <DialogFooter className="flex-col gap-2 sm:flex-row">
+            {/* <Button
+              variant="outline"
+              onClick={() => setShowUnsavedDialog(false)}
+            >
+              Keep editing
+            </Button> */}
+            <Button
+              variant="outline"
+              className="gap-2"
+              onClick={handleExportExcel}
+            >
+              <Download className="w-4 h-4" />
+              Download Excel
+            </Button>
+            <Button
+              variant="destructive"
+              onClick={() => {
+                setShowUnsavedDialog(false);
+                onBack();
+              }}
+            >
+              Discard &amp; go back
+            </Button>
+            <Button
+              className="gap-2"
+              disabled={confirmedProducts.size === 0 || isSaving}
+              onClick={() => {
+                void saveCases().then((ok) => {
+                  if (ok) {
+                    setShowUnsavedDialog(false);
+                    onBack();
+                  }
+                });
+              }}
+            >
+              {isSaving ? (
+                <>
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                  Saving...
+                </>
+              ) : (
+                <>
+                  <Check className="w-4 h-4" />
+                  Save &amp; go back
+                </>
+              )}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
