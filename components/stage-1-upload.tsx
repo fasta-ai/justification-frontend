@@ -35,6 +35,7 @@ import { cn } from "@/lib/utils";
 import { useProductStore } from "@/lib/store";
 import { useApplicationUpload } from "@/hooks/use-application-upload";
 import { useEGUpload } from "@/hooks/use-eg-upload";
+import type { AiSuggestion } from "@/hooks/use-application-upload";
 import { useCatalogueUpload } from "@/hooks/use-catalogue-upload";
 import type { Product, ProductFile, ExtractedData } from "@/lib/types";
 
@@ -66,6 +67,100 @@ const fileTypes = [
     accept: ".pdf,.doc,.docx,.txt",
   },
 ] as const;
+
+interface AiSuggestionRowsProps {
+  isReviewing: boolean;
+  suggestions: Array<[string, AiSuggestion]>;
+  onAccept: (field: string, value: any) => void;
+  onDismiss: (field: string) => void;
+}
+
+/** Inline value for short answers, a wrapped block for long prose. */
+function SuggestionValue({ value }: { value: any }) {
+  const text = String(value ?? "/") || "/";
+  if (text.length <= 80) {
+    return <code className="rounded bg-background px-1">{text}</code>;
+  }
+  return (
+    <pre className="w-full max-h-40 overflow-y-auto whitespace-pre-wrap rounded bg-background px-2 py-1 font-sans text-[11px]">
+      {text}
+    </pre>
+  );
+}
+
+/**
+ * Rows rendered inside the extracted-data table showing where the AI's
+ * reading differs from the parser's. Advisory only: nothing is applied until
+ * the reviewer clicks "Use AI value".
+ */
+function AiSuggestionRows({
+  isReviewing,
+  suggestions,
+  onAccept,
+  onDismiss,
+}: AiSuggestionRowsProps) {
+  return (
+    <>
+      {isReviewing && (
+        <TableRow>
+          <TableCell
+            colSpan={2}
+            className="text-[11px] text-muted-foreground italic"
+          >
+            AI cross-check running…
+          </TableCell>
+        </TableRow>
+      )}
+      {suggestions.length > 0 && (
+        <TableRow>
+          <TableCell colSpan={2} className="p-0">
+            <div className="border-l-2 border-amber-400 bg-amber-50/60 dark:bg-amber-950/20 px-3 py-2 space-y-2">
+              <p className="text-[11px] font-semibold text-amber-900 dark:text-amber-300">
+                AI read {suggestions.length} field
+                {suggestions.length === 1 ? "" : "s"} differently — nothing has
+                been changed
+              </p>
+              {suggestions.map(([field, s]) => (
+                <div
+                  key={field}
+                  className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px]"
+                >
+                  <span className="font-medium">{field}</span>
+                  <Badge
+                    variant={s.kind === "conflict" ? "destructive" : "secondary"}
+                    className="px-1 py-0 text-[10px]"
+                  >
+                    {s.kind}
+                  </Badge>
+                  <span className="text-muted-foreground">current</span>
+                  <SuggestionValue value={s.current} />
+                  <span className="text-muted-foreground">AI</span>
+                  <SuggestionValue value={s.suggested} />
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="h-5 px-2 text-[10px]"
+                    onClick={() => onAccept(field, s.suggested)}
+                  >
+                    Use AI value
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    className="h-5 px-2 text-[10px]"
+                    onClick={() => onDismiss(field)}
+                  >
+                    Keep current
+                  </Button>
+                </div>
+              ))}
+            </div>
+          </TableCell>
+        </TableRow>
+      )}
+    </>
+  );
+}
 
 interface ProductUploadCardProps {
   product: Product;
@@ -113,7 +208,13 @@ function ProductUploadCard({
     aiReview: applicationAiReview,
     isAiReviewing: isApplicationAiReviewing,
   } = useApplicationUpload();
-  const { uploadEGForm, isLoading: isUploadingEG, egFormData } = useEGUpload();
+  const {
+    uploadEGForm,
+    isLoading: isUploadingEG,
+    egFormData,
+    aiReview: egAiReview,
+    isAiReviewing: isEgAiReviewing,
+  } = useEGUpload();
   const {
     uploadCatalogue,
     isLoading: isUploadingCatalogue,
@@ -336,9 +437,37 @@ function ProductUploadCard({
     setDismissedSuggestions((prev) => ({ ...prev, [field]: true }));
   }, []);
 
+  // Same contract for the EG form (dates): advisory, reviewer decides.
+  const [dismissedEgSuggestions, setDismissedEgSuggestions] = useState<
+    Record<string, boolean>
+  >({});
+  const openEgSuggestions = Object.entries(
+    egAiReview?.suggestions ?? {},
+  ).filter(([field]) => !dismissedEgSuggestions[field]);
+
+  const acceptEgSuggestion = useCallback(
+    (field: string, value: any) => {
+      setEditableEgData((prev) => {
+        const merged = { ...prev, [field]: value };
+        onUpdate({ egData: { data: merged } });
+        return merged;
+      });
+      setDismissedEgSuggestions((prev) => ({ ...prev, [field]: true }));
+    },
+    [onUpdate],
+  );
+
+  const dismissEgSuggestion = useCallback((field: string) => {
+    setDismissedEgSuggestions((prev) => ({ ...prev, [field]: true }));
+  }, []);
+
   const handleEGUpload = useCallback(
     (file: File) => {
-      console.log("product", product);
+      if (!commonTranch.trim()) {
+        alert("Please fill in the Tranche field before uploading an EG form.");
+        document.getElementById("common-tranch")?.focus();
+        return;
+      }
       uploadEGForm(file, commonTranch, commonSeason)
         .then((data) => {
           // Automatically set product name to {NO}{NO_R}
@@ -687,6 +816,12 @@ function ProductUploadCard({
                             EG Form Data
                           </TableCell>
                         </TableRow>
+                        <AiSuggestionRows
+                          isReviewing={isEgAiReviewing}
+                          suggestions={openEgSuggestions}
+                          onAccept={acceptEgSuggestion}
+                          onDismiss={dismissEgSuggestion}
+                        />
                         <TableRow>
                           <TableCell className="text-xs font-medium text-muted-foreground">
                             Application No
@@ -1116,77 +1251,12 @@ function ProductUploadCard({
 
                         {/* AI second opinion. Advisory only: nothing here has
                             been applied to the values above. */}
-                        {isApplicationAiReviewing && (
-                          <TableRow>
-                            <TableCell
-                              colSpan={2}
-                              className="text-[11px] text-muted-foreground italic"
-                            >
-                              AI cross-check running…
-                            </TableCell>
-                          </TableRow>
-                        )}
-                        {openSuggestions.length > 0 && (
-                          <TableRow>
-                            <TableCell colSpan={2} className="p-0">
-                              <div className="border-l-2 border-amber-400 bg-amber-50/60 dark:bg-amber-950/20 px-3 py-2 space-y-2">
-                                <p className="text-[11px] font-semibold text-amber-900 dark:text-amber-300">
-                                  AI read {openSuggestions.length} field
-                                  {openSuggestions.length === 1 ? "" : "s"}{" "}
-                                  differently — nothing has been changed
-                                </p>
-                                {openSuggestions.map(([field, s]) => (
-                                  <div
-                                    key={field}
-                                    className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px]"
-                                  >
-                                    <span className="font-medium">{field}</span>
-                                    <Badge
-                                      variant={
-                                        s.kind === "conflict"
-                                          ? "destructive"
-                                          : "secondary"
-                                      }
-                                      className="px-1 py-0 text-[10px]"
-                                    >
-                                      {s.kind}
-                                    </Badge>
-                                    <span className="text-muted-foreground">
-                                      current
-                                    </span>
-                                    <code className="rounded bg-background px-1">
-                                      {String(s.current ?? "/") || "/"}
-                                    </code>
-                                    <span className="text-muted-foreground">
-                                      AI
-                                    </span>
-                                    <code className="rounded bg-background px-1">
-                                      {String(s.suggested)}
-                                    </code>
-                                    <Button
-                                      size="sm"
-                                      variant="outline"
-                                      className="h-5 px-2 text-[10px]"
-                                      onClick={() =>
-                                        acceptSuggestion(field, s.suggested)
-                                      }
-                                    >
-                                      Use AI value
-                                    </Button>
-                                    <Button
-                                      size="sm"
-                                      variant="ghost"
-                                      className="h-5 px-2 text-[10px]"
-                                      onClick={() => dismissSuggestion(field)}
-                                    >
-                                      Keep current
-                                    </Button>
-                                  </div>
-                                ))}
-                              </div>
-                            </TableCell>
-                          </TableRow>
-                        )}
+                        <AiSuggestionRows
+                          isReviewing={isApplicationAiReviewing}
+                          suggestions={openSuggestions}
+                          onAccept={acceptSuggestion}
+                          onDismiss={dismissSuggestion}
+                        />
 
                         <TableRow>
                           <TableCell className="text-xs font-medium text-muted-foreground">
@@ -1645,14 +1715,33 @@ export function Stage1Upload({ onNext }: Stage1UploadProps) {
     }
   }, [commonSeason, commonTranch]);
 
+  // Tranche is mandatory: it is stamped onto every product, feeds the EG
+  // extractor (Ref = "<tranche>_<App_No>"), and the create-case API rejects
+  // cases without it. Block product creation until it is filled in.
+  const [trancheError, setTrancheError] = useState(false);
+  const ensureTranche = useCallback((): boolean => {
+    if (commonTranch.trim()) {
+      setTrancheError(false);
+      return true;
+    }
+    setTrancheError(true);
+    document.getElementById("common-tranch")?.focus();
+    return false;
+  }, [commonTranch]);
+
   const handleAddProduct = useCallback(() => {
+    if (!ensureTranche()) return;
     const newProduct = createNewProduct();
     addProduct(newProduct);
     setExpandedProducts((prev) => [...prev, newProduct.id]);
-  }, [addProduct, createNewProduct]);
+  }, [addProduct, createNewProduct, ensureTranche]);
 
   const handleBatchUpload = useCallback(
     (e: React.ChangeEvent<HTMLInputElement>) => {
+      if (!ensureTranche()) {
+        e.target.value = "";
+        return;
+      }
       const files = Array.from(e.target.files || []);
 
       // Group files by name pattern (e.g., "product1_spec.pdf", "product1_cert.pdf")
@@ -1689,7 +1778,7 @@ export function Stage1Upload({ onNext }: Stage1UploadProps) {
 
       e.target.value = "";
     },
-    [addProduct, createNewProduct],
+    [addProduct, createNewProduct, ensureTranche],
   );
 
   const toggleExpand = useCallback((id: string) => {
@@ -1838,21 +1927,37 @@ export function Stage1Upload({ onNext }: Stage1UploadProps) {
             className="h-8 text-sm"
           />
         </div>
-        <div className="flex items-center gap-2">
-          <Label
-            htmlFor="common-tranch"
-            title="Applies to all products"
-            className="w-16 shrink-0 text-xs text-muted-foreground"
-          >
-            Tranche
-          </Label>
-          <Input
-            id="common-tranch"
-            value={commonTranch}
-            onChange={(e) => setCommonTranch(e.target.value)}
-            placeholder="e.g., Tranche A"
-            className="h-8 text-sm"
-          />
+        <div className="flex flex-col gap-1">
+          <div className="flex items-center gap-2">
+            <Label
+              htmlFor="common-tranch"
+              title="Applies to all products (required)"
+              className="w-16 shrink-0 text-xs text-muted-foreground"
+            >
+              Tranche <span className="text-destructive">*</span>
+            </Label>
+            <Input
+              id="common-tranch"
+              value={commonTranch}
+              onChange={(e) => {
+                setCommonTranch(e.target.value);
+                if (e.target.value.trim()) setTrancheError(false);
+              }}
+              placeholder="e.g., T13"
+              required
+              aria-required
+              aria-invalid={trancheError}
+              className={cn(
+                "h-8 text-sm",
+                trancheError && "border-destructive focus-visible:ring-destructive",
+              )}
+            />
+          </div>
+          {trancheError && (
+            <p className="text-xs text-destructive" role="alert">
+              Tranche is required before adding products.
+            </p>
+          )}
         </div>
       </div>
 

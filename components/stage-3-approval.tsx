@@ -24,6 +24,7 @@ import {
   ArrowUpDown,
   ArrowUp,
   ArrowDown,
+  Download,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -73,6 +74,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
+import { deriveEgDefaults, downloadEgForm } from "@/lib/eg-form";
 import { useProductStore } from "@/lib/store";
 import {
   useSimilarMatches,
@@ -590,6 +592,26 @@ export function Stage3Approval({ onBack, onComplete }: Stage3ApprovalProps) {
     [],
   );
 
+  const [downloadingEgFormId, setDownloadingEgFormId] = useState<string | null>(
+    null,
+  );
+
+  const handleDownloadEgForm = useCallback(async (caseItem: Case) => {
+    setDownloadingEgFormId(caseItem.id);
+    try {
+      await downloadEgForm(caseItem);
+    } catch (error) {
+      console.error("Error generating EG form:", error);
+      toast.error(
+        error instanceof Error
+          ? `Failed to generate EG form: ${error.message}`
+          : "Failed to generate EG form",
+      );
+    } finally {
+      setDownloadingEgFormId(null);
+    }
+  }, []);
+
   const handleCopy = (id: string, text: string) => {
     navigator.clipboard.writeText(text);
     setCopiedId(id);
@@ -701,10 +723,19 @@ export function Stage3Approval({ onBack, onComplete }: Stage3ApprovalProps) {
       catalogueData: caseItem.catalogueData || {},
     });
 
-    // Initialize form data
+    // Initialize form data. Fields that are empty on egData but derivable
+    // from the rest of the case (status, justification, application form)
+    // are prefilled so the reviewer does not have to retype them.
+    const egDefaults = deriveEgDefaults(caseItem);
     const egData: Record<string, string> = {};
     egFields.forEach((field) => {
-      egData[field] = String(caseItem.egData?.[field] || "");
+      const stored = caseItem.egData?.[field];
+      const storedStr =
+        stored === undefined || stored === null ? "" : String(stored);
+      egData[field] =
+        storedStr.trim() === "" || storedStr.trim() === "/"
+          ? (egDefaults[field] ?? storedStr)
+          : storedStr;
     });
     setEgFormData(egData);
 
@@ -1692,7 +1723,7 @@ export function Stage3Approval({ onBack, onComplete }: Stage3ApprovalProps) {
                 </div>
               </div>
             </CardHeader>
-            <CardContent>
+            <CardContent className="gap-0">
               {casesError && (
                 <div className="bg-red-50 border border-red-200 text-red-800 px-4 py-3 rounded-lg mb-4">
                   <p className="font-semibold">Error loading cases</p>
@@ -2073,6 +2104,28 @@ export function Stage3Approval({ onBack, onComplete }: Stage3ApprovalProps) {
                             {/* Sticky Actions Column */}
                             <TableCell className="sticky right-0 whitespace-nowrap px-4 bg-background border-l z-20">
                               <div className="flex items-center gap-1">
+                                {(caseItem.status === "approved" ||
+                                  caseItem.status === "rejected") && (
+                                  <Button
+                                    variant="ghost"
+                                    size="icon"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      handleDownloadEgForm(caseItem);
+                                    }}
+                                    className="h-8 w-8"
+                                    title="Download EG Form"
+                                    disabled={
+                                      downloadingEgFormId === caseItem.id
+                                    }
+                                  >
+                                    {downloadingEgFormId === caseItem.id ? (
+                                      <Loader2 className="h-4 w-4 animate-spin" />
+                                    ) : (
+                                      <Download className="h-4 w-4" />
+                                    )}
+                                  </Button>
+                                )}
                                 <Button
                                   variant="ghost"
                                   size="icon"
