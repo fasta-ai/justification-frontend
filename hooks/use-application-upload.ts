@@ -9,13 +9,23 @@ export interface AiSuggestion {
   similarity: number | null;
 }
 
+/** A field the review applied on its own (same value, tidier rendering). */
+export interface AiAppliedChange {
+  from: any;
+  to: any;
+  kind: "cleaner" | "similar";
+  similarity: number | null;
+}
+
 /** Shape returned by /api/extract/application/ai-review. */
 export interface AiReviewResult {
-  /** Rule-based values, UNCHANGED - the model never overwrites anything. */
+  /** Rule-based values; only `applied` fields differ from `rules`. */
   data: Record<string, any>;
   rules: Record<string, any>;
   /** Differences for the reviewer to accept or ignore. */
   suggestions: Record<string, AiSuggestion>;
+  /** Fields the review already applied (revertable in the UI). */
+  applied: Record<string, AiAppliedChange>;
 }
 
 export function useApplicationUpload() {
@@ -80,6 +90,7 @@ export function useApplicationUpload() {
               data: review.data,
               rules: review.rules ?? {},
               suggestions: review.suggestions ?? {},
+              applied: review.applied ?? {},
             });
           }
         })

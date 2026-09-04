@@ -35,7 +35,10 @@ import { cn } from "@/lib/utils";
 import { useProductStore } from "@/lib/store";
 import { useApplicationUpload } from "@/hooks/use-application-upload";
 import { useEGUpload } from "@/hooks/use-eg-upload";
-import type { AiSuggestion } from "@/hooks/use-application-upload";
+import type {
+  AiAppliedChange,
+  AiSuggestion,
+} from "@/hooks/use-application-upload";
 import { useCatalogueUpload } from "@/hooks/use-catalogue-upload";
 import type { Product, ProductFile, ExtractedData } from "@/lib/types";
 
@@ -73,6 +76,18 @@ interface AiSuggestionRowsProps {
   suggestions: Array<[string, AiSuggestion]>;
   onAccept: (field: string, value: any) => void;
   onDismiss: (field: string) => void;
+  /** Changes the review applied on its own; each can be reverted. */
+  applied?: Array<[string, AiAppliedChange]>;
+  onRevert?: (field: string) => void;
+}
+
+/** Rows for a textarea so the whole answer is visible without scrolling. */
+function textareaRows(value: unknown, min = 3, max = 30): number {
+  const text = value == null ? "" : String(value);
+  const lines = text
+    .split("\n")
+    .reduce((n, line) => n + Math.max(1, Math.ceil(line.length / 70)), 0);
+  return Math.min(max, Math.max(min, lines + 1));
 }
 
 /** Inline value for short answers, a wrapped block for long prose. */
@@ -98,9 +113,46 @@ function AiSuggestionRows({
   suggestions,
   onAccept,
   onDismiss,
+  applied = [],
+  onRevert,
 }: AiSuggestionRowsProps) {
   return (
     <>
+      {applied.length > 0 && (
+        <TableRow>
+          <TableCell colSpan={2} className="p-0">
+            <div className="border-l-2 border-sky-400 bg-sky-50/60 dark:bg-sky-950/20 px-3 py-2 space-y-1">
+              <p className="text-[11px] font-semibold text-sky-900 dark:text-sky-300">
+                AI tidied {applied.length} field
+                {applied.length === 1 ? "" : "s"} (same value, cleaner
+                wording) — applied
+              </p>
+              {applied.map(([field, c]) => (
+                <div
+                  key={field}
+                  className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px]"
+                >
+                  <span className="font-medium">{field}</span>
+                  <span className="text-muted-foreground">was</span>
+                  <SuggestionValue value={c.from} />
+                  <span className="text-muted-foreground">now</span>
+                  <SuggestionValue value={c.to} />
+                  {onRevert && (
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      className="h-5 px-2 text-[10px]"
+                      onClick={() => onRevert(field)}
+                    >
+                      Revert
+                    </Button>
+                  )}
+                </div>
+              ))}
+            </div>
+          </TableCell>
+        </TableRow>
+      )}
       {isReviewing && (
         <TableRow>
           <TableCell
@@ -436,6 +488,46 @@ function ProductUploadCard({
   const dismissSuggestion = useCallback((field: string) => {
     setDismissedSuggestions((prev) => ({ ...prev, [field]: true }));
   }, []);
+
+  // Fields the review applied by itself (e.g. a tidier Typ_Disability that
+  // reads the same as the parser's). Written into the editable values once
+  // per review, shown to the reviewer, and revertable.
+  const appliedReviewRef = useRef<object | null>(null);
+  const [revertedApplied, setRevertedApplied] = useState<
+    Record<string, boolean>
+  >({});
+  useEffect(() => {
+    if (!applicationAiReview || appliedReviewRef.current === applicationAiReview)
+      return;
+    appliedReviewRef.current = applicationAiReview;
+    setRevertedApplied({});
+    const entries = Object.entries(applicationAiReview.applied ?? {});
+    if (entries.length === 0) return;
+    setEditableAppData((prev) => {
+      const merged = { ...prev };
+      for (const [field, change] of entries) merged[field] = change.to;
+      onUpdate({ applicationData: { data: merged } });
+      return merged;
+    });
+  }, [applicationAiReview, onUpdate]);
+
+  const openApplied = Object.entries(
+    applicationAiReview?.applied ?? {},
+  ).filter(([field]) => !revertedApplied[field]);
+
+  const revertApplied = useCallback(
+    (field: string) => {
+      const change = applicationAiReview?.applied?.[field];
+      if (!change) return;
+      setEditableAppData((prev) => {
+        const merged = { ...prev, [field]: change.from ?? "" };
+        onUpdate({ applicationData: { data: merged } });
+        return merged;
+      });
+      setRevertedApplied((prev) => ({ ...prev, [field]: true }));
+    },
+    [applicationAiReview, onUpdate],
+  );
 
   // Same contract for the EG form (dates): advisory, reviewer decides.
   const [dismissedEgSuggestions, setDismissedEgSuggestions] = useState<
@@ -1256,6 +1348,8 @@ function ProductUploadCard({
                           suggestions={openSuggestions}
                           onAccept={acceptSuggestion}
                           onDismiss={dismissSuggestion}
+                          applied={openApplied}
+                          onRevert={revertApplied}
                         />
 
                         <TableRow>
@@ -1496,7 +1590,8 @@ function ProductUploadCard({
                                   PA_Justify: e.target.value,
                                 }))
                               }
-                              className="w-full h-20 px-2 py-1 text-xs border rounded resize-none"
+                              rows={textareaRows(editableAppData.PA_Justify)}
+                              className="w-full min-h-20 px-2 py-1 text-xs border rounded resize-y whitespace-pre-wrap"
                             />
                           </TableCell>
                         </TableRow>
@@ -1513,7 +1608,8 @@ function ProductUploadCard({
                                   PA_Elaborate: e.target.value,
                                 }))
                               }
-                              className="w-full h-20 px-2 py-1 text-xs border rounded resize-none"
+                              rows={textareaRows(editableAppData.PA_Elaborate)}
+                              className="w-full min-h-20 px-2 py-1 text-xs border rounded resize-y whitespace-pre-wrap"
                             />
                           </TableCell>
                         </TableRow>

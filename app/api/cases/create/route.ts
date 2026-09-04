@@ -74,11 +74,20 @@ export async function POST(request: NextRequest) {
       const errorText = await backendResponse.text();
       console.error("Backend API error:", errorText);
 
+      // Surface the backend's own reason (e.g. "Case 2001P already exists in
+      // tranche T13") instead of a bare status text.
+      let reason = backendResponse.statusText || "Failed to create case";
+      try {
+        const parsed = JSON.parse(errorText);
+        const msg = parsed?.message ?? parsed?.error;
+        if (Array.isArray(msg)) reason = msg.join("; ");
+        else if (typeof msg === "string" && msg.trim()) reason = msg;
+      } catch {
+        if (errorText.trim()) reason = errorText.slice(0, 300);
+      }
+
       return NextResponse.json(
-        {
-          success: false,
-          error: `Backend API error: ${backendResponse.statusText}`,
-        } as CreateCaseResponse,
+        { success: false, error: reason } as CreateCaseResponse,
         { status: backendResponse.status },
       );
     }

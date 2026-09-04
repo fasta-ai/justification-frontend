@@ -65,6 +65,7 @@ export function useEGUpload() {
                 data: review.data,
                 rules: review.rules ?? {},
                 suggestions: review.suggestions ?? {},
+                applied: review.applied ?? {},
               });
             }
           })

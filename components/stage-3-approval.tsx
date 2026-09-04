@@ -25,6 +25,7 @@ import {
   ArrowUp,
   ArrowDown,
   Download,
+  FileSpreadsheet,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -75,6 +76,7 @@ import {
 } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
 import { deriveEgDefaults, downloadEgForm } from "@/lib/eg-form";
+import { exportCasesToExcel, exportableCases } from "@/lib/eg-excel-export";
 import { useProductStore } from "@/lib/store";
 import {
   useSimilarMatches,
@@ -345,6 +347,15 @@ const catalogueFields = [
 const LONG_TEXT_NAME_RE =
   /rem|remark|justif|elaborate|desc|reason|note|_jus$|jrem|rreject|reply|status|comment/i;
 
+/** Rows for a long-text editor so the whole answer is visible. */
+function longTextRows(value: unknown, min = 3, max = 30): number {
+  const text = value == null ? "" : String(value);
+  const lines = text
+    .split("\n")
+    .reduce((n, line) => n + Math.max(1, Math.ceil(line.length / 90)), 0);
+  return Math.min(max, Math.max(min, lines + 1));
+}
+
 function isLongTextField(field: string, value: unknown): boolean {
   const str = value == null ? "" : String(value);
   if (LONG_TEXT_NAME_RE.test(field)) return true;
@@ -611,6 +622,40 @@ export function Stage3Approval({ onBack, onComplete }: Stage3ApprovalProps) {
       setDownloadingEgFormId(null);
     }
   }, []);
+
+  // Excel export (A_EG_Form / A_PA_Form / A_Record_Admin) of decided cases.
+  // Selected cases win when any are selected; otherwise every approved or
+  // rejected case in the list goes out.
+  const [isExportingExcel, setIsExportingExcel] = useState(false);
+  const handleExportExcel = useCallback(async () => {
+    const selected = cases.filter((c) => selectedProducts.includes(c.id));
+    const pool = selected.length > 0 ? selected : cases;
+    const toExport = exportableCases(pool);
+    if (toExport.length === 0) {
+      toast.error(
+        selected.length > 0
+          ? "None of the selected cases are approved or rejected"
+          : "No approved or rejected cases to export",
+      );
+      return;
+    }
+    setIsExportingExcel(true);
+    try {
+      const { fileName, caseCount } = await exportCasesToExcel(toExport);
+      toast.success(
+        `Exported ${caseCount} case${caseCount === 1 ? "" : "s"} to ${fileName}`,
+      );
+    } catch (error) {
+      console.error("Error exporting Excel sheets:", error);
+      toast.error(
+        error instanceof Error
+          ? `Excel export failed: ${error.message}`
+          : "Excel export failed",
+      );
+    } finally {
+      setIsExportingExcel(false);
+    }
+  }, [cases, selectedProducts]);
 
   const handleCopy = (id: string, text: string) => {
     navigator.clipboard.writeText(text);
@@ -1588,6 +1633,21 @@ export function Stage3Approval({ onBack, onComplete }: Stage3ApprovalProps) {
           <Badge variant="secondary" className="gap-1">
             {pendingCount} pending
           </Badge>
+          <Button
+            variant="outline"
+            size="sm"
+            className="gap-2"
+            onClick={handleExportExcel}
+            disabled={isExportingExcel || approvedCount + rejectedCount === 0}
+            title="Download A_EG_Form, A_PA_Form and A_Record_Admin for approved / rejected cases (selected cases only, if any are selected)"
+          >
+            {isExportingExcel ? (
+              <Loader2 className="w-4 h-4 animate-spin" />
+            ) : (
+              <FileSpreadsheet className="w-4 h-4" />
+            )}
+            Export Excel
+          </Button>
           <Button
             variant="outline"
             size="icon"
@@ -2824,8 +2884,8 @@ export function Stage3Approval({ onBack, onComplete }: Stage3ApprovalProps) {
                                   [field]: e.target.value,
                                 }));
                               }}
-                              className="text-sm"
-                              rows={3}
+                              className="text-sm whitespace-pre-wrap"
+                              rows={longTextRows(val)}
                               placeholder="/"
                             />
                           ) : (
@@ -2872,7 +2932,7 @@ export function Stage3Approval({ onBack, onComplete }: Stage3ApprovalProps) {
                                   [field]: e.target.value,
                                 }));
                               }}
-                              rows={3}
+                              rows={longTextRows(val)}
                               placeholder="/"
                             />
                           ) : (
@@ -2964,7 +3024,7 @@ export function Stage3Approval({ onBack, onComplete }: Stage3ApprovalProps) {
                             description: e.target.value,
                           }));
                         }}
-                        rows={3}
+                        rows={longTextRows(catalogueFormData.description)}
                       />
                     </div>
                   </div>

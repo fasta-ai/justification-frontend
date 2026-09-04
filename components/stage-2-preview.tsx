@@ -3,6 +3,10 @@
 import { useState, useCallback, useEffect, useRef } from "react";
 import { utils, writeFile } from "xlsx";
 import {
+  applyRecordAdminDefaults,
+  recordAdminDefault,
+} from "@/lib/record-admin-defaults";
+import {
   Edit2,
   Check,
   ChevronLeft,
@@ -38,6 +42,15 @@ import {
 } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
+
+/** Rows for a long-text editor so the whole answer is visible. */
+function longTextRows(value: unknown, min = 3, max = 30): number {
+  const text = value == null ? "" : String(value);
+  const lines = text
+    .split("\n")
+    .reduce((n, line) => n + Math.max(1, Math.ceil(line.length / 90)), 0);
+  return Math.min(max, Math.max(min, lines + 1));
+}
 import { cn } from "@/lib/utils";
 import { useProductStore } from "@/lib/store";
 import { useCreateCase } from "@/hooks/use-create-case";
@@ -100,26 +113,14 @@ function EditDialog({ product, isOpen, onClose, onSave }: EditDialogProps) {
       const egVal = prod.applicationData?.data?.["PA_RefL"];
       if (egVal !== undefined) return egVal;
     }
-    if (
-      key === "Recd_EGF" ||
-      key === "Recd_PAF" ||
-      key === "Recd_Quo" ||
-      key === "Recd_Cat" ||
-      key === "Req_I_SWD_YN" ||
-      key === "Req_RepSWD_YN"
-    ) {
-      return "Yes";
-    }
-    if (
-      key === "Ret_Rept" ||
-      key === "RecdCurrWk_YN" ||
-      key === "EGF_Ready_YN" ||
-      key === "EGF_To_EG_YN" ||
-      key === "EG_Reply_YN" ||
-      key === "EGF_To_SWD_YN" ||
-      key === "FUF_Comp_YN"
-    ) {
-      return "NO";
+    // Yes/No tracking columns: a stored answer wins, otherwise the shared
+    // default (also applied when the case is created, see handleConfirm).
+    const trackingDefault = recordAdminDefault(key);
+    if (trackingDefault !== undefined) {
+      const stored = prod.egData?.data?.[key];
+      return stored !== undefined && stored !== "" && stored !== "/"
+        ? stored
+        : trackingDefault;
     }
     if (key === "DatEntry") {
       return "";
@@ -281,7 +282,7 @@ function EditDialog({ product, isOpen, onClose, onSave }: EditDialogProps) {
                             [field]: e.target.value,
                           }))
                         }
-                        rows={2}
+                        rows={longTextRows(appFormData[field])}
                         placeholder="/"
                       />
                     ) : (
@@ -365,7 +366,7 @@ function EditDialog({ product, isOpen, onClose, onSave }: EditDialogProps) {
                         description: e.target.value,
                       }))
                     }
-                    rows={3}
+                    rows={longTextRows(catalogueFormData.description)}
                   />
                 </div>
               </div>
@@ -644,7 +645,9 @@ export function Stage2Preview({ onNext, onBack }: Stage2PreviewProps) {
             status: "pending" as const,
             recdEG: true,
             catalogueData: product.catalogueData?.data || {},
-            egData: product.egData?.data || {},
+            // Persist the Yes/No tracking defaults the preview shows, so Step 3
+            // and the A_Record_Admin export see the same values.
+            egData: applyRecordAdminDefaults(product.egData?.data || {}),
             applicationData: product.applicationData?.data || {},
             categoryId: product.category || undefined,
             tranche: product.tranch || undefined,
@@ -658,12 +661,20 @@ export function Stage2Preview({ onNext, onBack }: Stage2PreviewProps) {
       // Wait for all cases to be created
       const results = await Promise.all(caseCreationPromises);
 
-      // Check if any failed
-      const failedCases = results.filter((r) => !r || !r.success);
+      // Report every failure with its case number and the backend's reason
+      // (duplicate case in the same tranche, missing tranche, ...).
+      const failures = results
+        .map((r, i) => ({ r, product: confirmedProductsList[i] }))
+        .filter(({ r }) => !r || !r.success)
+        .map(({ r, product }) => {
+          const caseNumber = `${product.egData?.data?.NO ?? ""}${product.egData?.data?.NO_R ?? ""}`;
+          const label = caseNumber || product.name || "unnamed product";
+          return `${label}: ${r?.error || "unknown error"}`;
+        });
 
-      if (failedCases.length > 0) {
+      if (failures.length > 0) {
         alert(
-          `Warning: ${failedCases.length} case(s) failed to create. Please check the console for details.`,
+          `${failures.length} case(s) failed to create:\n\n${failures.join("\n")}`,
         );
       } else {
         console.log(`Successfully created ${results.length} cases`);
@@ -715,26 +726,14 @@ export function Stage2Preview({ onNext, onBack }: Stage2PreviewProps) {
         if (egVal !== undefined && egVal === "Yes") return "Procurement";
         else return "Procurement";
       }
-      if (
-        key === "Recd_EGF" ||
-        key === "Recd_PAF" ||
-        key === "Recd_Quo" ||
-        key === "Recd_Cat" ||
-        key === "Req_I_SWD_YN" ||
-        key === "Req_RepSWD_YN"
-      ) {
-        return "Yes";
-      }
-      if (
-        key === "Ret_Rept" ||
-        key === "RecdCurrWk_YN" ||
-        key === "EGF_Ready_YN" ||
-        key === "EGF_To_EG_YN" ||
-        key === "EG_Reply_YN" ||
-        key === "EGF_To_SWD_YN" ||
-        key === "FUF_Comp_YN"
-      ) {
-        return "NO";
+      // Yes/No tracking columns: a stored answer wins, otherwise the shared
+      // default (also applied when the case is created, see handleConfirm).
+      const trackingDefault = recordAdminDefault(key);
+      if (trackingDefault !== undefined) {
+        const stored = product.egData?.data?.[key];
+        return stored !== undefined && stored !== "" && stored !== "/"
+          ? stored
+          : trackingDefault;
       }
       if (key === "DatEntry") {
         return "";
@@ -842,26 +841,14 @@ export function Stage2Preview({ onNext, onBack }: Stage2PreviewProps) {
         if (egVal !== undefined && egVal === "Yes") return "Procurement";
         else return "Procurement";
       }
-      if (
-        key === "Recd_EGF" ||
-        key === "Recd_PAF" ||
-        key === "Recd_Quo" ||
-        key === "Recd_Cat" ||
-        key === "Req_I_SWD_YN" ||
-        key === "Req_RepSWD_YN"
-      ) {
-        return "Yes";
-      }
-      if (
-        key === "Ret_Rept" ||
-        key === "RecdCurrWk_YN" ||
-        key === "EGF_Ready_YN" ||
-        key === "EGF_To_EG_YN" ||
-        key === "EG_Reply_YN" ||
-        key === "EGF_To_SWD_YN" ||
-        key === "FUF_Comp_YN"
-      ) {
-        return "NO";
+      // Yes/No tracking columns: a stored answer wins, otherwise the shared
+      // default (also applied when the case is created, see handleConfirm).
+      const trackingDefault = recordAdminDefault(key);
+      if (trackingDefault !== undefined) {
+        const stored = product.egData?.data?.[key];
+        return stored !== undefined && stored !== "" && stored !== "/"
+          ? stored
+          : trackingDefault;
       }
       if (key === "DatEntry") {
         return "";

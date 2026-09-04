@@ -42,14 +42,14 @@ export interface EgFormData {
 }
 
 /** "/" is the extractor's null marker; treat it like an empty value. */
-function clean(value: unknown): string {
+export function clean(value: unknown): string {
   if (value === undefined || value === null) return "";
   const s = String(value).trim();
   return s === "/" ? "" : s;
 }
 
 /** First non-empty candidate, else "". */
-function pick(...candidates: unknown[]): string {
+export function pick(...candidates: unknown[]): string {
   for (const c of candidates) {
     const s = clean(c);
     if (s) return s;

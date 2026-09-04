@@ -30,7 +30,9 @@ export function useCreateCase() {
             const errorMessage = err instanceof Error ? err.message : "An error occurred while creating the case";
             console.error("Error creating case:", err);
             setError(errorMessage);
-            return null;
+            // Return the reason rather than null so callers creating several
+            // cases can tell the reviewer WHICH one failed and why.
+            return { success: false, error: errorMessage };
         } finally {
             setIsLoading(false);
         }
