@@ -12,6 +12,7 @@ import {
   FileText,
   FileCheck,
   Users,
+  DatabaseZap,
 } from "lucide-react";
 import Image from "next/image";
 import Link from "next/link";
@@ -104,6 +105,19 @@ export function Sidebar({ mobileMenuOpen, setMobileMenuOpen }: SidebarProps) {
             }`}
           >
             <Users className="w-5 h-5" />
+          </Link>
+
+          <Link
+            href="/imports"
+            title="Import previous cases"
+            aria-current={pathname === "/imports" ? "page" : undefined}
+            className={`p-3 rounded-lg transition-colors ${
+              pathname === "/imports"
+                ? "bg-primary text-primary-foreground"
+                : "hover:bg-accent text-foreground"
+            }`}
+          >
+            <DatabaseZap className="w-5 h-5" />
           </Link>
 
           {/* <Link
@@ -216,6 +230,20 @@ export function Sidebar({ mobileMenuOpen, setMobileMenuOpen }: SidebarProps) {
               >
                 <Users className="w-4 h-4" />
                 Staff Directory
+              </Link>
+
+              <Link
+                href="/imports"
+                aria-current={pathname === "/imports" ? "page" : undefined}
+                className={`w-full flex items-center gap-3 px-4 py-2 rounded-lg text-sm font-medium ${
+                  pathname === "/imports"
+                    ? "bg-primary text-primary-foreground"
+                    : "hover:bg-accent text-foreground"
+                }`}
+                onClick={() => setMobileMenuOpen(false)}
+              >
+                <DatabaseZap className="w-4 h-4" />
+                Import previous cases
               </Link>
 
               {/* <Link

@@ -20,6 +20,7 @@ import {
   Download,
   Trash2,
   Loader2,
+  ArrowRight,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -1322,8 +1323,8 @@ export function Stage2Preview({ onNext, onBack }: Stage2PreviewProps) {
           <p className="text-sm text-muted-foreground">
             Your edits to {products.length} product
             {products.length === 1 ? "" : "s"} have not been saved as cases. If
-            you go back now they will be lost. You can save them, download a
-            copy as Excel, or discard them.
+            you go back now they will be lost. You can save them and continue
+            to approval, download a copy as Excel, or discard them.
           </p>
           <DialogFooter className="flex-col gap-2 sm:flex-row">
             {/* <Button
@@ -1353,10 +1354,12 @@ export function Stage2Preview({ onNext, onBack }: Stage2PreviewProps) {
               className="gap-2"
               disabled={confirmedProducts.size === 0 || isSaving}
               onClick={() => {
+                // Saving creates the cases, so the natural next step is the
+                // approval stage, not the upload page the reviewer came from.
                 void saveCases().then((ok) => {
                   if (ok) {
                     setShowUnsavedDialog(false);
-                    onBack();
+                    onNext();
                   }
                 });
               }}
@@ -1368,8 +1371,8 @@ export function Stage2Preview({ onNext, onBack }: Stage2PreviewProps) {
                 </>
               ) : (
                 <>
-                  <Check className="w-4 h-4" />
-                  Save &amp; go back
+                  Continue to Approval
+                  <ArrowRight className="w-4 h-4" />
                 </>
               )}
             </Button>
