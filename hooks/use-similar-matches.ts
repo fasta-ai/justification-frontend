@@ -1,6 +1,8 @@
 import { useState, useCallback } from "react";
 
 interface SimilarMatchItem {
+  /** Reference-list category. Sent as a ranking boost — never a filter —
+   *  because it is the applicant's choice and reviewers re-categorise. */
   PA_Cat?: string;
   PA_PName?: string;
   PA_Mod_No?: string;
@@ -35,6 +37,10 @@ export interface SimilarMatch {
   modelCode?: string;
   /** Which retrieval tier surfaced this match. */
   tier?: "exact" | "fuzzy" | "semantic";
+  /** Which field family produced the winning score. */
+  matchedOn?: "name" | "description" | "justification" | "semantic";
+  /** Cosine agreement between the query and this row, when the backend computed it. */
+  semanticScore?: number;
 }
 
 interface UseSimilarMatchesReturn {
@@ -98,6 +104,10 @@ export function useSimilarMatches(): UseSimilarMatchesReturn {
           // weighted below PA_PName. Kept separate from extraText so the short
           // name is not diluted by the description for trigram scoring.
           egName: item.egName || undefined,
+          category:
+            item.PA_Cat && item.PA_Cat.trim() && item.PA_Cat.trim() !== "/"
+              ? item.PA_Cat.trim()
+              : undefined,
           datasetName: options.datasetName,
           datasetType: options.datasetType,
           limit: options.limit ?? 10,
@@ -151,7 +161,14 @@ export function useSimilarMatches(): UseSimilarMatchesReturn {
                 metadata.Model_Code ||
                 metadata.Model_List ||
                 "",
-              tier: currentTier && currentTier !== "none" ? currentTier : undefined,
+              // Per-match tier: a topped-up page mixes exact/fuzzy rows with
+              // semantic ones, so the page-level tier alone would mislabel them.
+              tier:
+                m.tier ||
+                (currentTier && currentTier !== "none" ? currentTier : undefined),
+              matchedOn: m.matchedOn,
+              semanticScore:
+                typeof m.semanticScore === "number" ? m.semanticScore : undefined,
             };
           },
         );

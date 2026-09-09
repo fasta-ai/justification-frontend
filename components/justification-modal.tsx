@@ -44,10 +44,29 @@ export interface JustificationInputs {
   PA_PName: string;
   PA_Brand: string;
   PA_Mod_No: string;
+  /** Reference-list category (PA_Cat). Boosts same-category similar cases. */
+  PA_Cat: string;
   PA_Elaborate: string;
   egName: string;
   egDesc: string;
   Q12b_Jus: string;
+}
+
+/**
+ * Catalogue description for a case. `egData.catalogueDesc` is empty on every
+ * imported T13 case, but the same text lives under `catalogueData` in one of
+ * three shapes depending on which extractor produced it. The similar-case
+ * search embeds this alongside the product name, so without it the semantic
+ * tier only sees a name.
+ */
+export function getCatalogueDescription(c: Case | null | undefined): string {
+  const cat = (c?.catalogueData || {}) as Record<string, any>;
+  return (
+    cat.description ||
+    cat.catalogue_data?.description ||
+    cat.products?.[0]?.description ||
+    ""
+  );
 }
 
 export interface SaveDraftPayload {
@@ -116,6 +135,7 @@ function extractInputs(c: Case | null): JustificationInputs {
       PA_PName: "",
       PA_Brand: "",
       PA_Mod_No: "",
+      PA_Cat: "",
       PA_Elaborate: "",
       egName: "",
       egDesc: "",
@@ -128,9 +148,10 @@ function extractInputs(c: Case | null): JustificationInputs {
     PA_PName: app.PA_PName || "",
     PA_Brand: app.PA_Brand || "",
     PA_Mod_No: app.PA_Mod_No || "",
+    PA_Cat: app.PA_Cat || "",
     PA_Elaborate: app.PA_Elaborate || app.PA_Justify || "",
     egName: eg.App_PName || eg.App_PNam_Mod || "",
-    egDesc: eg.catalogueDesc || "",
+    egDesc: eg.catalogueDesc || getCatalogueDescription(c),
     Q12b_Jus: eg.Q12b_Jus || "",
   };
 }

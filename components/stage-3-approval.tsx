@@ -26,6 +26,9 @@ import {
   ArrowDown,
   Download,
   FileSpreadsheet,
+  Maximize2,
+  ChevronDown,
+  ChevronUp,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -56,6 +59,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { Checkbox } from "@/components/ui/checkbox";
+import { Switch } from "@/components/ui/switch";
 import {
   Table,
   TableBody,
@@ -96,6 +100,7 @@ import {
   type JustificationInputs,
   type SaveDraftPayload,
   type GenerateResult,
+  getCatalogueDescription,
 } from "@/components/justification-modal";
 import { CaseAuditLogDialog } from "@/components/case-audit-log-dialog";
 import { toast } from "sonner";
@@ -385,6 +390,8 @@ const JUSTIFICATION_APP_FIELDS = [
 ] as const;
 
 const JUSTIFY_MAX_CHARS = 600;
+/** Below this a justification already fits in ~three lines, so a toggle is noise. */
+const JUSTIFY_CLAMP_CHARS = 240;
 
 function trimApplicationForPrompt(
   app: Record<string, unknown> | undefined,
@@ -551,6 +558,11 @@ export function Stage3Approval({ onBack, onComplete }: Stage3ApprovalProps) {
   const [similarCaseAnalysis, setSimilarCaseAnalysis] =
     useState<SimilarCaseAnalysis | null>(null);
   const [isLoadingSimilarCases, setIsLoadingSimilarCases] = useState(false);
+  const [isSimilarCasesExpanded, setIsSimilarCasesExpanded] = useState(false);
+  // Ids whose full justification is showing inside the expanded dialog.
+  const [expandedJustifications, setExpandedJustifications] = useState<
+    string[]
+  >([]);
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [editingCase, setEditingCase] = useState<EditingCase | null>(null);
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
@@ -565,6 +577,9 @@ export function Stage3Approval({ onBack, onComplete }: Stage3ApprovalProps) {
   >("eg");
   const [casesToDelete, setCasesToDelete] = useState<string[]>([]);
   const [isDeleteConfirmOpen, setIsDeleteConfirmOpen] = useState(false);
+  // Bulk delete is opt-in: off, the table is a single-select review list;
+  // on, it becomes a multi-select list whose only extra action is delete.
+  const [bulkDeleteMode, setBulkDeleteMode] = useState(false);
   const [selectedSimilarCases, setSelectedSimilarCases] = useState<string[]>(
     [],
   );
@@ -703,6 +718,14 @@ export function Stage3Approval({ onBack, onComplete }: Stage3ApprovalProps) {
     navigator.clipboard.writeText(templates);
     setCopiedId("templates");
     setTimeout(() => setCopiedId(null), 2000);
+  };
+
+  const handleToggleJustification = (caseId: string) => {
+    setExpandedJustifications((prev) =>
+      prev.includes(caseId)
+        ? prev.filter((id) => id !== caseId)
+        : [...prev, caseId],
+    );
   };
 
   const handleOpenDeleteConfirm = (caseId: string) => {
@@ -868,6 +891,7 @@ export function Stage3Approval({ onBack, onComplete }: Stage3ApprovalProps) {
     setSimilarCaseAnalysis(null);
     setSimilarJustifications([]);
     setSelectedSimilarCases([]);
+    setExpandedJustifications([]);
     setGeneratedJustification("");
     setPendingDecision(null);
     setIsLoadingSimilarCases(false);
@@ -922,7 +946,8 @@ export function Stage3Approval({ onBack, onComplete }: Stage3ApprovalProps) {
       // whose EG form we want to copy.
       const eg = (selectedCase.egData || {}) as Record<string, string>;
       const egName = eg.App_PName || eg.App_PNam_Mod || "";
-      const egDesc = eg.catalogueDesc || "";
+      const egDesc = eg.catalogueDesc || getCatalogueDescription(selectedCase);
+      const paCat = String(selectedCase.applicationData?.PA_Cat ?? "");
 
       console.log("Searching for similar cases with:", {
         paPName,
@@ -939,6 +964,7 @@ export function Stage3Approval({ onBack, onComplete }: Stage3ApprovalProps) {
           PA_PName: paPName,
           PA_Mod_No: paModNo,
           PA_Brand: paBrand,
+          PA_Cat: paCat,
           PA_Elaborate: paElaborate,
           egName,
           egDesc,
@@ -1032,7 +1058,8 @@ export function Stage3Approval({ onBack, onComplete }: Stage3ApprovalProps) {
           const paModNo = selectedCase.applicationData?.PA_Mod_No || "";
           const eg = (selectedCase.egData || {}) as Record<string, string>;
           const egName = eg.App_PName || eg.App_PNam_Mod || "";
-          const egDesc = eg.catalogueDesc || "";
+          const egDesc =
+            eg.catalogueDesc || getCatalogueDescription(selectedCase);
 
           console.log(
             `Generating justification for case ${selectedCase.caseNumber}:`,
@@ -1052,6 +1079,7 @@ export function Stage3Approval({ onBack, onComplete }: Stage3ApprovalProps) {
                 PA_PName: paPName,
                 PA_Mod_No: paModNo,
                 PA_Brand: selectedCase.applicationData?.PA_Brand || "",
+                PA_Cat: String(selectedCase.applicationData?.PA_Cat ?? ""),
                 PA_Elaborate:
                   selectedCase.applicationData?.PA_Elaborate ||
                   selectedCase.applicationData?.PA_Justify ||
@@ -1186,6 +1214,7 @@ export function Stage3Approval({ onBack, onComplete }: Stage3ApprovalProps) {
               PA_PName: inputs.PA_PName,
               PA_Mod_No: inputs.PA_Mod_No,
               PA_Brand: inputs.PA_Brand,
+              PA_Cat: inputs.PA_Cat,
               PA_Elaborate: inputs.PA_Elaborate,
               egName: inputs.egName,
               egDesc: inputs.egDesc,
@@ -1596,6 +1625,11 @@ export function Stage3Approval({ onBack, onComplete }: Stage3ApprovalProps) {
 
   const handleSelectProduct = useCallback(
     (productId: string) => {
+      // Bulk delete mode is the only place multi-select is allowed.
+      if (bulkDeleteMode) {
+        toggleProductSelection(productId);
+        return;
+      }
       if (selectedProducts.length === 1 && selectedProducts[0] === productId) {
         clearSelection();
       } else {
@@ -1603,8 +1637,180 @@ export function Stage3Approval({ onBack, onComplete }: Stage3ApprovalProps) {
         toggleProductSelection(productId);
       }
     },
-    [selectedProducts, clearSelection, toggleProductSelection],
+    [bulkDeleteMode, selectedProducts, clearSelection, toggleProductSelection],
   );
+
+  // Switching modes drops the current selection so a multi-case pick can never
+  // leak into the single-case review flow (or vice versa).
+  const handleToggleBulkDeleteMode = useCallback(
+    (enabled: boolean) => {
+      setBulkDeleteMode(enabled);
+      clearSelection();
+    },
+    [clearSelection],
+  );
+
+  // One similar-case row. Shared by the inline list and the expanded dialog,
+  // which differ only in padding and justification text size.
+  const renderSimilarCaseItem = (
+    caseItem: SimilarJustification,
+    expanded = false,
+  ) => {
+    // Justifications run to JUSTIFY_MAX_CHARS, so they are clamped to keep
+    // the list scannable and opened one at a time.
+    const isJustificationLong =
+      (caseItem.justification || "").length > JUSTIFY_CLAMP_CHARS;
+    const showFullJustification =
+      !isJustificationLong || expandedJustifications.includes(caseItem.id);
+
+    return (
+      <div
+        key={caseItem.id}
+        className={cn(
+          "rounded-lg border bg-card transition-colors",
+          expanded ? "p-4" : "p-3",
+        )}
+      >
+        <div className="flex items-start justify-between gap-3 mb-1.5">
+          <div className="flex items-center gap-2 min-w-0">
+            <Checkbox
+              checked={selectedSimilarCases.includes(caseItem.id)}
+              onCheckedChange={() => handleToggleSimilarCase(caseItem.id)}
+              onClick={(e) => e.stopPropagation()}
+              className="h-4 w-4 shrink-0"
+            />
+            <span className="font-medium text-sm break-words">
+              {caseItem.productName}
+            </span>
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-6 w-6"
+              onClick={(e) => {
+                e.stopPropagation();
+                handleOpenSimilarCaseModal(caseItem);
+              }}
+              title="View details"
+            >
+              <Info className="h-3.5 w-3.5 text-muted-foreground" />
+            </Button>
+          </div>
+          <div className="flex items-center gap-2 shrink-0 flex-wrap justify-end">
+            <span className="text-xs text-muted-foreground whitespace-nowrap">
+              {Math.round(caseItem.similarity * 100)}% match
+            </span>
+            {caseItem.tier && (
+              <Badge
+                variant="outline"
+                className={cn(
+                  "text-xs",
+                  caseItem.tier === "exact" &&
+                    "bg-green-50 border-green-300 text-green-800",
+                  caseItem.tier === "fuzzy" &&
+                    "bg-amber-50 border-amber-300 text-amber-800",
+                  caseItem.tier === "semantic" &&
+                    "bg-slate-50 border-slate-300 text-slate-700",
+                )}
+                title={
+                  caseItem.tier === "exact"
+                    ? "All product-name tokens matched in the corpus"
+                    : caseItem.tier === "fuzzy"
+                      ? "Matched via trigram fuzzy similarity"
+                      : "Matched via embedding similarity (weakest tier)"
+                }
+              >
+                {caseItem.tier}
+              </Badge>
+            )}
+            <Badge
+              variant={
+                caseItem.decision === "approved" ? "default" : "destructive"
+              }
+              className={cn(
+                "text-xs",
+                caseItem.decision === "approved" &&
+                  "bg-success text-success-foreground",
+              )}
+            >
+              {caseItem.decision}
+            </Badge>
+            {caseItem.approvalStatus && (
+              <Badge
+                variant="outline"
+                className="text-xs bg-blue-50 border-blue-200 text-blue-700"
+              >
+                Q12a: {caseItem.approvalStatus}
+              </Badge>
+            )}
+          </div>
+        </div>
+        <p
+          className={cn(
+            "text-muted-foreground whitespace-pre-wrap",
+            expanded ? "text-sm" : "text-xs",
+            !showFullJustification && "line-clamp-3",
+          )}
+        >
+          {caseItem.justification}
+        </p>
+        {isJustificationLong && (
+          <Button
+            variant="link"
+            size="sm"
+            className="h-auto p-0 mt-1 text-xs"
+            onClick={() => handleToggleJustification(caseItem.id)}
+          >
+            {showFullJustification ? (
+              <>
+                View less
+                <ChevronUp className="h-3.5 w-3.5" />
+              </>
+            ) : (
+              <>
+                View more
+                <ChevronDown className="h-3.5 w-3.5" />
+              </>
+            )}
+          </Button>
+        )}
+        <div className="flex items-center justify-between mt-2 gap-2 flex-wrap">
+          <div className="flex items-center gap-1 flex-wrap">
+            <Badge variant="outline" className="text-xs">
+              {caseItem.category}
+            </Badge>
+            <Badge variant="outline" className="text-xs">
+              {caseItem.metadata.Tranche}
+            </Badge>
+            <Badge variant="outline" className="text-xs">
+              {caseItem.metadata.fid}
+            </Badge>
+          </div>
+          <div className="flex items-center gap-1">
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-7 px-2 gap-1"
+              onClick={() => handleOpenReplaceDialog(caseItem)}
+              title="Copy fields from this case into the current case"
+            >
+              <Replace className="h-3.5 w-3.5" />
+              Copy
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-7 px-2 gap-1"
+              onClick={() => handleOpenReplaceDialog(caseItem)}
+              title="Open copy + justification workspace seeded with this case"
+            >
+              <Sparkles className="h-3.5 w-3.5" />
+              Justification
+            </Button>
+          </div>
+        </div>
+      </div>
+    );
+  };
 
   const approvedCount = cases.filter((c) => c.status === "approved").length;
   const rejectedCount = cases.filter((c) => c.status === "rejected").length;
@@ -1618,10 +1824,47 @@ export function Stage3Approval({ onBack, onComplete }: Stage3ApprovalProps) {
             Approval Workflow
           </h2>
           <p className="text-muted-foreground mt-1">
-            Select a case to review its justification and make a decision
+            {bulkDeleteMode
+              ? "Bulk delete mode — pick the cases you want to remove, then delete them"
+              : "Select a case to review its justification and make a decision"}
           </p>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
+          <div
+            className={cn(
+              "flex items-center gap-2.5 rounded-lg border px-3 py-1.5 transition-colors",
+              bulkDeleteMode && "border-destructive/40 bg-destructive/5",
+            )}
+          >
+            <Switch
+              id="bulk-delete-mode"
+              checked={bulkDeleteMode}
+              onCheckedChange={handleToggleBulkDeleteMode}
+              disabled={isDeletingCase}
+              aria-label="Bulk delete mode"
+            />
+            <div className="leading-tight">
+              <Label
+                htmlFor="bulk-delete-mode"
+                className="flex items-center gap-1.5 text-sm font-medium cursor-pointer"
+              >
+                <Trash2
+                  className={cn(
+                    "w-3.5 h-3.5",
+                    bulkDeleteMode
+                      ? "text-destructive"
+                      : "text-muted-foreground",
+                  )}
+                />
+                Bulk delete
+              </Label>
+              <p className="text-xs text-muted-foreground">
+                {bulkDeleteMode
+                  ? "Select many cases to delete at once"
+                  : "Off — one case at a time, for review"}
+              </p>
+            </div>
+          </div>
           <Badge variant="outline" className="gap-1">
             <CheckCircle2 className="w-3 h-3 text-success" />
             {approvedCount} approved
@@ -1791,34 +2034,36 @@ export function Stage3Approval({ onBack, onComplete }: Stage3ApprovalProps) {
                 </div>
               )}
 
-              {selectedProducts.length > 0 && !isLoadingCases && (
-                <div className="flex items-center gap-3 mb-3 px-3 py-2 rounded-lg border bg-muted/40 text-sm">
-                  <span className="font-medium">
-                    {selectedProducts.length} selected
-                  </span>
-                  <div className="ml-auto flex items-center gap-2">
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      onClick={clearSelection}
-                      disabled={isDeletingCase}
-                      className="h-8"
-                    >
-                      Clear
-                    </Button>
-                    <Button
-                      variant="destructive"
-                      size="sm"
-                      onClick={handleOpenBulkDeleteConfirm}
-                      disabled={isDeletingCase}
-                      className="h-8"
-                    >
-                      <Trash2 className="w-4 h-4 mr-1.5" />
-                      Delete selected
-                    </Button>
+              {bulkDeleteMode &&
+                selectedProducts.length > 0 &&
+                !isLoadingCases && (
+                  <div className="flex items-center gap-3 mb-3 px-3 py-2 rounded-lg border bg-muted/40 text-sm">
+                    <span className="font-medium">
+                      {selectedProducts.length} selected
+                    </span>
+                    <div className="ml-auto flex items-center gap-2">
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={clearSelection}
+                        disabled={isDeletingCase}
+                        className="h-8"
+                      >
+                        Clear
+                      </Button>
+                      <Button
+                        variant="destructive"
+                        size="sm"
+                        onClick={handleOpenBulkDeleteConfirm}
+                        disabled={isDeletingCase}
+                        className="h-8"
+                      >
+                        <Trash2 className="w-4 h-4 mr-1.5" />
+                        Delete selected
+                      </Button>
+                    </div>
                   </div>
-                </div>
-              )}
+                )}
 
               {isLoadingCases ? (
                 <div className="flex items-center justify-center py-12">
@@ -1833,18 +2078,20 @@ export function Stage3Approval({ onBack, onComplete }: Stage3ApprovalProps) {
                     <TableHeader>
                       <TableRow className="bg-muted/50">
                         <TableHead className="w-12 sticky left-0 bg-muted/50 z-10">
-                          <Checkbox
-                            checked={
-                              allVisibleSelected
-                                ? true
-                                : visibleSelectedCount > 0
-                                  ? "indeterminate"
-                                  : false
-                            }
-                            onCheckedChange={handleSelectAll}
-                            disabled={visibleCases.length === 0}
-                            aria-label="Select all visible cases"
-                          />
+                          {bulkDeleteMode && (
+                            <Checkbox
+                              checked={
+                                allVisibleSelected
+                                  ? true
+                                  : visibleSelectedCount > 0
+                                    ? "indeterminate"
+                                    : false
+                              }
+                              onCheckedChange={handleSelectAll}
+                              disabled={visibleCases.length === 0}
+                              aria-label="Select all visible cases"
+                            />
+                          )}
                         </TableHead>
                         {/* Priority columns first */}
                         <TableHead className="font-semibold whitespace-nowrap px-4 bg-primary/5">
@@ -2065,7 +2312,7 @@ export function Stage3Approval({ onBack, onComplete }: Stage3ApprovalProps) {
                               <Checkbox
                                 checked={isSelected}
                                 onCheckedChange={() =>
-                                  toggleProductSelection(caseItem.id)
+                                  handleSelectProduct(caseItem.id)
                                 }
                                 aria-label={`Select case ${caseItem.caseNumber}`}
                               />
@@ -2306,32 +2553,70 @@ export function Stage3Approval({ onBack, onComplete }: Stage3ApprovalProps) {
                       </CardTitle>
                       <CardDescription className="text-xs">
                         {similarCaseAnalysis?.cases?.length} similar cases found
-                        {similarTier && similarTier !== "none" && (
-                          <>
-                            {" · retrieval tier: "}
-                            <span
-                              className={cn(
-                                "font-medium",
-                                similarTier === "exact" && "text-green-700",
-                                similarTier === "fuzzy" && "text-amber-700",
-                                similarTier === "semantic" && "text-slate-600",
-                              )}
-                            >
-                              {similarTier}
-                            </span>
-                          </>
-                        )}
+                        {similarTier &&
+                          similarTier !== "none" &&
+                          (() => {
+                            // A page can mix tiers (exact/fuzzy rows topped up
+                            // with semantic ones), so show the breakdown rather
+                            // than the page-level tier alone.
+                            const counts: Record<string, number> = {};
+                            for (const c of similarCaseAnalysis?.cases || []) {
+                              const t = c.tier || similarTier;
+                              counts[t] = (counts[t] || 0) + 1;
+                            }
+                            const order = [
+                              "exact",
+                              "fuzzy",
+                              "semantic",
+                            ] as const;
+                            return (
+                              <>
+                                {" · matched by: "}
+                                {order
+                                  .filter((t) => counts[t])
+                                  .map((t, i) => (
+                                    <span key={t}>
+                                      {i > 0 && ", "}
+                                      <span
+                                        className={cn(
+                                          "font-medium",
+                                          t === "exact" && "text-green-700",
+                                          t === "fuzzy" && "text-amber-700",
+                                          t === "semantic" && "text-slate-600",
+                                        )}
+                                      >
+                                        {counts[t]} {t}
+                                      </span>
+                                    </span>
+                                  ))}
+                              </>
+                            );
+                          })()}
                       </CardDescription>
                     </div>
                   </div>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    onClick={() => setSimilarCaseAnalysis(null)}
-                    className="text-muted-foreground"
-                  >
-                    <XCircle className="w-4 h-4" />
-                  </Button>
+                  <div className="flex items-center gap-1">
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => setIsSimilarCasesExpanded(true)}
+                      className="text-muted-foreground"
+                      title="Expand the similar cases list"
+                      aria-label="Expand the similar cases list"
+                    >
+                      <Maximize2 className="w-4 h-4" />
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => setSimilarCaseAnalysis(null)}
+                      className="text-muted-foreground"
+                      title="Dismiss similar cases"
+                      aria-label="Dismiss similar cases"
+                    >
+                      <XCircle className="w-4 h-4" />
+                    </Button>
+                  </div>
                 </div>
               </CardHeader>
               <CardContent className="space-y-5">
@@ -2419,130 +2704,9 @@ export function Stage3Approval({ onBack, onComplete }: Stage3ApprovalProps) {
                     </div>
                   </div>
                   <div className="space-y-2 max-h-64 overflow-y-auto pr-1">
-                    {similarCaseAnalysis.cases.map((caseItem) => (
-                      <div
-                        key={caseItem.id}
-                        className="p-3 rounded-lg border bg-card transition-colors"
-                      >
-                        <div className="flex items-center justify-between mb-1.5">
-                          <div className="flex items-center gap-2">
-                            <Checkbox
-                              checked={selectedSimilarCases.includes(
-                                caseItem.id,
-                              )}
-                              onCheckedChange={() =>
-                                handleToggleSimilarCase(caseItem.id)
-                              }
-                              onClick={(e) => e.stopPropagation()}
-                              className="h-4 w-4"
-                            />
-                            <span className="font-medium text-sm">
-                              {caseItem.productName}
-                            </span>
-                            <Button
-                              variant="ghost"
-                              size="icon"
-                              className="h-6 w-6"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                handleOpenSimilarCaseModal(caseItem);
-                              }}
-                              title="View details"
-                            >
-                              <Info className="h-3.5 w-3.5 text-muted-foreground" />
-                            </Button>
-                          </div>
-                          <div className="flex items-center gap-2">
-                            <span className="text-xs text-muted-foreground">
-                              {Math.round(caseItem.similarity * 100)}% match
-                            </span>
-                            {caseItem.tier && (
-                              <Badge
-                                variant="outline"
-                                className={cn(
-                                  "text-xs",
-                                  caseItem.tier === "exact" &&
-                                    "bg-green-50 border-green-300 text-green-800",
-                                  caseItem.tier === "fuzzy" &&
-                                    "bg-amber-50 border-amber-300 text-amber-800",
-                                  caseItem.tier === "semantic" &&
-                                    "bg-slate-50 border-slate-300 text-slate-700",
-                                )}
-                                title={
-                                  caseItem.tier === "exact"
-                                    ? "All product-name tokens matched in the corpus"
-                                    : caseItem.tier === "fuzzy"
-                                      ? "Matched via trigram fuzzy similarity"
-                                      : "Matched via embedding similarity (weakest tier)"
-                                }
-                              >
-                                {caseItem.tier}
-                              </Badge>
-                            )}
-                            <Badge
-                              variant={
-                                caseItem.decision === "approved"
-                                  ? "default"
-                                  : "destructive"
-                              }
-                              className={cn(
-                                "text-xs",
-                                caseItem.decision === "approved" &&
-                                  "bg-success text-success-foreground",
-                              )}
-                            >
-                              {caseItem.decision}
-                            </Badge>
-                            {caseItem.approvalStatus && (
-                              <Badge
-                                variant="outline"
-                                className="text-xs bg-blue-50 border-blue-200 text-blue-700"
-                              >
-                                Q12a: {caseItem.approvalStatus}
-                              </Badge>
-                            )}
-                          </div>
-                        </div>
-                        <p className="text-xs text-muted-foreground">
-                          {caseItem.justification}
-                        </p>
-                        <div className="flex items-center justify-between mt-2 gap-2 flex-wrap">
-                          <div className="flex items-center gap-1 flex-wrap">
-                            <Badge variant="outline" className="text-xs">
-                              {caseItem.category}
-                            </Badge>
-                            <Badge variant="outline" className="text-xs">
-                              {caseItem.metadata.Tranche}
-                            </Badge>
-                            <Badge variant="outline" className="text-xs">
-                              {caseItem.metadata.fid}
-                            </Badge>
-                          </div>
-                          <div className="flex items-center gap-1">
-                            <Button
-                              variant="outline"
-                              size="sm"
-                              className="h-7 px-2 gap-1"
-                              onClick={() => handleOpenReplaceDialog(caseItem)}
-                              title="Copy fields from this case into the current case"
-                            >
-                              <Replace className="h-3.5 w-3.5" />
-                              Copy
-                            </Button>
-                            <Button
-                              variant="outline"
-                              size="sm"
-                              className="h-7 px-2 gap-1"
-                              onClick={() => handleOpenReplaceDialog(caseItem)}
-                              title="Open copy + justification workspace seeded with this case"
-                            >
-                              <Sparkles className="h-3.5 w-3.5" />
-                              Justification
-                            </Button>
-                          </div>
-                        </div>
-                      </div>
-                    ))}
+                    {similarCaseAnalysis.cases.map((caseItem) =>
+                      renderSimilarCaseItem(caseItem),
+                    )}
                   </div>
                 </div>
               </CardContent>
@@ -3150,6 +3314,33 @@ export function Stage3Approval({ onBack, onComplete }: Stage3ApprovalProps) {
           </DialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      {/* Expanded Similar Cases list — full-width reading view of every match */}
+      <Dialog
+        open={isSimilarCasesExpanded}
+        onOpenChange={setIsSimilarCasesExpanded}
+      >
+        <DialogContent className="sm:max-w-[1200px] max-h-[90vh] flex flex-col">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <BarChart3 className="w-5 h-5 text-muted-foreground" />
+              Similar Cases
+              {similarCaseAnalysis && (
+                <span className="text-sm font-normal text-muted-foreground">
+                  {similarCaseAnalysis.cases.length} matches ·{" "}
+                  {similarCaseAnalysis.approvalRate}% approved ·{" "}
+                  {similarCaseAnalysis.rejectionRate}% rejected
+                </span>
+              )}
+            </DialogTitle>
+          </DialogHeader>
+          <div className="flex-1 overflow-y-auto space-y-3 pr-1">
+            {similarCaseAnalysis?.cases.map((caseItem) =>
+              renderSimilarCaseItem(caseItem, true),
+            )}
+          </div>
+        </DialogContent>
+      </Dialog>
 
       {/* Similar Case Detail Modal */}
       {selectedSimilarCaseDetail && (
