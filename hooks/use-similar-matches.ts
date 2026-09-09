@@ -4,6 +4,9 @@ interface SimilarMatchItem {
   /** Reference-list category. Sent as a ranking boost — never a filter —
    *  because it is the applicant's choice and reviewers re-categorise. */
   PA_Cat?: string;
+  /** The case's own tranche. Cases from the same tranche are excluded from
+   *  results: they are still being decided, so they are not precedent. */
+  tranche?: string;
   PA_PName?: string;
   PA_Mod_No?: string;
   PA_Brand?: string;
@@ -108,6 +111,7 @@ export function useSimilarMatches(): UseSimilarMatchesReturn {
             item.PA_Cat && item.PA_Cat.trim() && item.PA_Cat.trim() !== "/"
               ? item.PA_Cat.trim()
               : undefined,
+          excludeTranche: item.tranche?.trim() || undefined,
           datasetName: options.datasetName,
           datasetType: options.datasetType,
           limit: options.limit ?? 10,

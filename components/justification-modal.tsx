@@ -46,6 +46,8 @@ export interface JustificationInputs {
   PA_Mod_No: string;
   /** Reference-list category (PA_Cat). Boosts same-category similar cases. */
   PA_Cat: string;
+  /** The case's own tranche, excluded from similar-case results. */
+  tranche: string;
   PA_Elaborate: string;
   egName: string;
   egDesc: string;
@@ -136,6 +138,7 @@ function extractInputs(c: Case | null): JustificationInputs {
       PA_Brand: "",
       PA_Mod_No: "",
       PA_Cat: "",
+      tranche: "",
       PA_Elaborate: "",
       egName: "",
       egDesc: "",
@@ -149,6 +152,7 @@ function extractInputs(c: Case | null): JustificationInputs {
     PA_Brand: app.PA_Brand || "",
     PA_Mod_No: app.PA_Mod_No || "",
     PA_Cat: app.PA_Cat || "",
+    tranche: c.tranche || "",
     PA_Elaborate: app.PA_Elaborate || app.PA_Justify || "",
     egName: eg.App_PName || eg.App_PNam_Mod || "",
     egDesc: eg.catalogueDesc || getCatalogueDescription(c),

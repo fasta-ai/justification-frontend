@@ -965,6 +965,7 @@ export function Stage3Approval({ onBack, onComplete }: Stage3ApprovalProps) {
           PA_Mod_No: paModNo,
           PA_Brand: paBrand,
           PA_Cat: paCat,
+          tranche: selectedCase.tranche || "",
           PA_Elaborate: paElaborate,
           egName,
           egDesc,
@@ -1080,6 +1081,7 @@ export function Stage3Approval({ onBack, onComplete }: Stage3ApprovalProps) {
                 PA_Mod_No: paModNo,
                 PA_Brand: selectedCase.applicationData?.PA_Brand || "",
                 PA_Cat: String(selectedCase.applicationData?.PA_Cat ?? ""),
+                tranche: selectedCase.tranche || "",
                 PA_Elaborate:
                   selectedCase.applicationData?.PA_Elaborate ||
                   selectedCase.applicationData?.PA_Justify ||
@@ -1215,6 +1217,7 @@ export function Stage3Approval({ onBack, onComplete }: Stage3ApprovalProps) {
               PA_Mod_No: inputs.PA_Mod_No,
               PA_Brand: inputs.PA_Brand,
               PA_Cat: inputs.PA_Cat,
+              tranche: inputs.tranche,
               PA_Elaborate: inputs.PA_Elaborate,
               egName: inputs.egName,
               egDesc: inputs.egDesc,
