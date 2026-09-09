@@ -13,15 +13,22 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { EXTRACTION_CONCURRENCY_OPTIONS } from "@/hooks/use-case-import";
+import {
+  EXTRACTION_CONCURRENCY_OPTIONS,
+  extractableRows,
+  extractionSkipReasons,
+} from "@/hooks/use-case-import";
 import { caseNumber } from "@/lib/case-import/join";
-import type { ImportRow } from "@/lib/case-import/types";
+import type { ImportRow, RegisterRole } from "@/lib/case-import/types";
 
 /** Observed round-trip for one catalogue through the two-stage extractor. */
 const SECONDS_PER_CATALOGUE = 30;
 
 interface Props {
   rows: ImportRow[];
+  requiredRoles: RegisterRole[];
+  onLimitToFirst: (n: number) => void;
+  onClearLimit: () => void;
   isExtracting: boolean;
   concurrency: number;
   onConcurrencyChange: (value: number) => void;
@@ -33,6 +40,9 @@ interface Props {
 
 export function StepExtraction({
   rows,
+  requiredRoles,
+  onLimitToFirst,
+  onClearLimit,
   isExtracting,
   concurrency,
   onConcurrencyChange,
@@ -41,15 +51,16 @@ export function StepExtraction({
   onBack,
   onContinue,
 }: Props) {
-  const withCatalogue = rows.filter((r) => !r.excluded && r.selectedCatalogue);
+  // Only cases that can actually be committed afterwards. Anything already in
+  // the corpus, or blocked for a structural reason, is left out — extracting
+  // it would spend a Vertex call on a row that gets skipped at commit.
+  const withCatalogue = extractableRows(rows, requiredRoles);
+  const skipped = extractionSkipReasons(rows, requiredRoles);
   const done = withCatalogue.filter((r) => r.extraction.status === "done");
   const failed = withCatalogue.filter((r) => r.extraction.status === "failed");
   const remaining = withCatalogue.filter(
     (r) => r.extraction.status !== "done" && r.extraction.status !== "skipped",
   );
-  const registerOnly = rows.filter(
-    (r) => !r.excluded && !r.selectedCatalogue,
-  ).length;
 
   const pct = withCatalogue.length
     ? Math.round((done.length / withCatalogue.length) * 100)
@@ -62,6 +73,43 @@ export function StepExtraction({
     <div className="space-y-6">
       <Card>
         <CardHeader>
+          <CardTitle className="text-base">Trial run</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <p className="text-sm text-muted-foreground">
+            Extraction is the only step that spends money, at roughly thirty
+            seconds and one Vertex call per case. Import a handful first and
+            check what lands in the corpus before committing a whole tranche.
+          </p>
+          <div className="flex flex-wrap items-center gap-2">
+            {[5, 10, 25].map((n) => (
+              <Button
+                key={n}
+                variant="outline"
+                size="sm"
+                disabled={isExtracting}
+                onClick={() => onLimitToFirst(n)}
+              >
+                First {n} cases
+              </Button>
+            ))}
+            <Button
+              variant="ghost"
+              size="sm"
+              disabled={isExtracting}
+              onClick={onClearLimit}
+            >
+              All {rows.length.toLocaleString()}
+            </Button>
+            <span className="text-sm text-muted-foreground ml-1 tabular-nums">
+              {withCatalogue.length.toLocaleString()} will be extracted
+            </span>
+          </div>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
           <CardTitle className="text-base">Extract catalogue descriptions</CardTitle>
         </CardHeader>
         <CardContent className="space-y-4">
@@ -69,7 +117,8 @@ export function StepExtraction({
             Each catalogue goes to the extraction service, which reads it and
             returns a short product description. That description is half of
             what the similar-case search matches on — the other half is the
-            product name.
+            product name — and a case that ends up without one is left out of
+            the import.
           </p>
 
           <Alert>
@@ -87,6 +136,25 @@ export function StepExtraction({
               stopped.
             </AlertDescription>
           </Alert>
+
+          {(skipped.alreadyInCorpus > 0 ||
+            skipped.blocked > 0 ||
+            skipped.noCatalogue > 0) && (
+            <p className="text-xs text-muted-foreground">
+              Not extracted, because these cases would not be committed anyway:{" "}
+              {[
+                skipped.alreadyInCorpus > 0 &&
+                  `${skipped.alreadyInCorpus} already in the corpus`,
+                skipped.noCatalogue > 0 &&
+                  `${skipped.noCatalogue} with no catalogue file`,
+                skipped.blocked > 0 &&
+                  `${skipped.blocked} missing register data`,
+              ]
+                .filter(Boolean)
+                .join(", ")}
+              .
+            </p>
+          )}
 
           <div className="flex flex-wrap items-end gap-3">
             <div className="space-y-1">
@@ -147,9 +215,9 @@ export function StepExtraction({
               )}
               <span>
                 <span className="font-medium text-foreground tabular-nums">
-                  {registerOnly}
+                  {withCatalogue.length}
                 </span>{" "}
-                register-only (no catalogue)
+                extractable
               </span>
             </div>
           </div>

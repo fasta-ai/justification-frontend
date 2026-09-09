@@ -178,3 +178,30 @@ export function splitProductAndModel(value: unknown): {
 
   return { productName: cleanValue(text), modelCode: null };
 }
+
+/**
+ * Excel serial to the `DD/MM/YYYY` the corpus stores its workflow dates in.
+ *
+ * The registers hold these as bare numbers (46108). Only `D_Entry` is kept as
+ * a full ISO timestamp, because it carries a time component.
+ */
+export function excelSerialToDayMonthYear(value: unknown): string {
+  const iso = excelSerialToISO(value);
+  if (!iso) return "";
+  const [y, m, d] = iso.slice(0, 10).split("-");
+  return `${d}/${m}/${y}`;
+}
+
+/**
+ * A number where the corpus stores one, otherwise the cleaned text.
+ *
+ * `NO`, `Q12c_TotC`, `No_Elderly` and `TotAmtR` are numeric in the corpus, but
+ * a beneficiary count is often the literal "/" — which must stay a string
+ * rather than becoming 0 or null.
+ */
+export function numericOrText(value: unknown): number | string {
+  const text = cleanText(value);
+  if (!text) return "";
+  const num = Number(text);
+  return Number.isFinite(num) && /^-?\d+(\.\d+)?$/.test(text) ? num : text;
+}

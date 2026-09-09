@@ -5,10 +5,12 @@ import type {
   RegisterRole,
 } from "./types";
 import {
-  DATE_COLUMNS,
   cleanModelCode,
+  cleanText,
   cleanValue,
+  excelSerialToDayMonthYear,
   excelSerialToISO,
+  numericOrText,
   splitProductAndModel,
 } from "./normalise";
 import { caseNumber } from "./join";
@@ -40,37 +42,71 @@ export const CORPUS_TYPE = "justification-data";
  */
 export const EMBEDDING_FIELDS = ["App_PName", "catalogueDesc"] as const;
 
-/** Fields copied straight through from the EG register when present. */
-const EG_PASSTHROUGH = [
-  "Applicant", "App_Cat", "Q12a", "Q12b_Jus", "Q12c_TotC", "Q12d_Quo",
-  "Q12e_JCost", "Q12f_RReject", "Q12g_JRem", "Q13a", "Q13b", "Remarks_EGF",
-  "No_Elderly", "No_Disable", "Typ_Disability", "No_Bene", "Prof_Staff",
-  "Typ_Staff",
+/** Width the source workbook truncates App_PNam_Mod to. */
+const RECORD_ADMIN_FIELD_CAP = 100;
+
+/**
+ * The record written to `datasets.metadata`.
+ *
+ * The shape mirrors the rows the corpus already holds, field for field, so an
+ * imported case is indistinguishable from one created through the Stage 1-3
+ * workflow. Three conventions are inherited from those rows rather than chosen
+ * here:
+ *
+ *  - PA-form values appear twice: at the root and nested under
+ *    `pa_form_data`;
+ *  - a field the registers left blank is written as `""`, not omitted, so the
+ *    key set is the same for every case;
+ *  - the registers' "/" and "NIL" placeholders are kept verbatim. They are
+ *    stripped only from the product name and model code, where they would
+ *    pollute the exact-match tier.
+ */
+
+/** Root fields taken from the EG register, in corpus order. */
+const EG_ROOT_FIELDS = [
+  "Q12a", "Q13a", "Q13b", "Staff1", "Staff2", "App_Cat", "Q12b_Jus",
+  "Q12d_Quo", "Applicant", "Q12g_JRem", "SWD_Off_I", "SWD_Off_N", "SWD_Off_P",
+  "Q12e_JCost", "Remarks_EGF", "Staff1_Info", "Staff2_Info", "Q12f_RReject",
 ];
 
-const PA_PASSTHROUGH = [
-  "PA_RefL", "PA_Cat", "PA_PName", "PA_Brand", "PA_Mod_No", "TotAmtR",
-  "PA_Justify", "PA_Elaborate", "Staff_Avail",
+/** Root fields taken from the PA register. */
+const PA_ROOT_FIELDS = [
+  "PA_Cat", "No_Bene", "Typ_Staff", "No_Disable", "No_Elderly", "Prof_Staff",
+  "Typ_Disability",
 ];
 
-const RA_PASSTHROUGH = [
-  "SWD_Ref", "App_No", "App_Type", "Rem_RA", "Recd_EGF", "Recd_PAF",
-  "Recd_Quo", "Recd_Cat", "WkRep_Status", "MRef",
+/** The nested `pa_form_data` block, in corpus order. */
+const PA_FORM_FIELDS = [
+  "PA_Cat", "No_Bene", "PA_RefL", "TotAmtR", "PA_Brand", "PA_PName",
+  "PA_Mod_No", "Typ_Staff", "No_Disable", "No_Elderly", "PA_Justify",
+  "Prof_Staff", "Staff_Avail", "PA_Elaborate", "Typ_Disability",
 ];
+
+/** Stored as numbers, not strings, wherever the value really is numeric. */
+const NUMERIC_FIELDS = new Set([
+  "NO", "Q12c_TotC", "No_Elderly", "TotAmtR", "No_Bene", "No_Disable",
+]);
+
+/** Workflow dates, stored as DD/MM/YYYY. */
+const DAY_MONTH_YEAR_FIELDS = new Set([
+  "D_EGF_ASWD", "D_PlnT_SWD", "D_ReqF_SWD", "D_EGF_Out", "D_EGF_Dead",
+  "D_ReqT_SWD", "D_RetF_SWD", "D_WkRep", "D_EGF_T_EG", "D_EG_Reply",
+]);
+
+/** One field, converted the way the corpus stores it. */
+function valueFor(field: string, raw: unknown): unknown {
+  if (DAY_MONTH_YEAR_FIELDS.has(field)) return excelSerialToDayMonthYear(raw);
+  if (NUMERIC_FIELDS.has(field)) return numericOrText(raw);
+  return cleanText(raw);
+}
 
 function copyFields(
   target: DatasetMetadata,
   source: Record<string, unknown> | null,
   fields: string[],
 ): void {
-  if (!source) return;
   for (const field of fields) {
-    if (!(field in source)) continue;
-    const raw = source[field];
-    const value = DATE_COLUMNS.has(field)
-      ? excelSerialToISO(raw)
-      : cleanValue(raw);
-    if (value !== null) target[field] = value;
+    target[field] = valueFor(field, source?.[field]);
   }
 }
 
@@ -93,73 +129,90 @@ export function resolveProduct(joined: JoinedCase): {
 
   const { productName, modelCode } = splitProductAndModel(raw);
 
-  // PA_Mod_No is a real model number when the split found none.
   const fallbackModel = cleanModelCode(
     joined.pa?.["PA_Mod_No"],
     productName ?? undefined,
   );
 
+  // The Record Admin column is capped at 100 characters in the source
+  // workbook — 10 of its 7,479 rows sit exactly on that cap with the model
+  // list cut mid-token ("… (VT-G8POES" with no closing bracket). The product
+  // name survives, but the model half is unusable, so take PA_Mod_No when it
+  // has the whole thing.
+  const wasTruncated = raw != null && raw.length === RECORD_ADMIN_FIELD_CAP;
+  const resolvedModel =
+    wasTruncated && fallbackModel ? fallbackModel : (modelCode ?? fallbackModel);
+
   return {
     appPName: productName,
     appPNamMod: raw,
-    modelCode: modelCode ?? fallbackModel,
+    modelCode: resolvedModel,
   };
 }
 
 /**
- * Build the metadata object for one row.
+ * Build the metadata object for one case.
  *
- * `importBatchId` tags the batch so it can be rolled back; `sourceKey` is the
- * stable natural key, which the corpus has never had — the existing loaders
- * deduplicate by whole-object jsonb containment, which breaks the moment any
- * field differs.
+ * `sourceKey`, `sourceRegisters`, `importBatchId` and `Model_Code` are the
+ * only additions to the corpus shape. The first three make an import
+ * deduplicable and reversible, which the existing rows are not; `Model_Code`
+ * feeds the exact-match tier, which today fires on 35 of 4,050 rows.
  */
 export function buildDatasetMetadata(
   row: ImportRow,
   importBatchId: string,
 ): DatasetMetadata {
   const { joined, folder, catalogueDesc } = row;
+  const { eg, pa, recordAdmin, caseKey } = joined;
   const metadata: DatasetMetadata = {};
 
-  copyFields(metadata, joined.eg, EG_PASSTHROUGH);
-  copyFields(metadata, joined.pa, PA_PASSTHROUGH);
-  copyFields(metadata, joined.recordAdmin, RA_PASSTHROUGH);
+  // Identity.
+  metadata.NO = numericOrText(caseKey.no);
+  metadata.Ref = cleanText(joined.ref);
+  metadata.fid = `${caseKey.no}${caseKey.noR}`;
+  metadata.NO_R = caseKey.noR;
+  metadata.EB_RM = caseKey.unit;
+  metadata.Tranche = caseKey.tranche;
 
+  copyFields(metadata, eg, EG_ROOT_FIELDS);
+  copyFields(metadata, pa, PA_ROOT_FIELDS);
+
+  // D_Entry keeps its time component, so it stays a full ISO timestamp.
+  metadata.D_Entry = excelSerialToISO(eg?.["D_Entry"]) ?? "";
+  metadata.Q12c_TotC = numericOrText(eg?.["Q12c_TotC"]);
+  for (const field of ["D_ReqF_SWD", "D_PlnT_SWD", "D_EGF_ASWD"]) {
+    metadata[field] = excelSerialToDayMonthYear(
+      eg?.[field] ?? recordAdmin?.[field],
+    );
+  }
+
+  // The PA form, nested the way the corpus stores it.
+  const paForm: DatasetMetadata = {};
+  copyFields(paForm, pa, PA_FORM_FIELDS);
+  metadata.pa_form_data = paForm;
+
+  // The product name the corpus matches on is the applicant's, bilingual and
+  // verbatim — that is what a new case arrives carrying, so exact and fuzzy
+  // matching compare like with like.
   const { appPName, appPNamMod, modelCode } = resolveProduct(joined);
-
-  // Both aliases are written on purpose. The corpus uses App_PName, the EG
-  // extraction pipeline produces App_PNam_Mod, and consumers read one or the
-  // other — zero of the 4,050 existing rows carry App_PNam_Mod, which is why
-  // Stage 3's original match field returned nothing.
-  if (appPName) metadata.App_PName = appPName;
+  metadata.App_PName = cleanText(pa?.["PA_PName"]) || appPName || "";
   if (appPNamMod) metadata.App_PNam_Mod = appPNamMod;
   if (modelCode) metadata.Model_Code = modelCode;
 
-  metadata.catalogueDesc = catalogueDesc || null;
+  metadata.catalogueDesc = catalogueDesc || "";
+  if (row.catalogueData) metadata.catalogue_data = row.catalogueData;
 
-  // Identity and provenance.
-  metadata.Ref = joined.ref || null;
-  metadata.Tranche = joined.caseKey.tranche;
-  metadata.EB_RM = joined.caseKey.unit;
-  metadata.NO = joined.caseKey.no;
-  metadata.NO_R = joined.caseKey.noR;
+  // Provenance — additions, not part of the inherited shape.
   metadata.sourceKey = joined.key;
-  // Which registers this case was assembled from. The backend re-checks this
-  // against its own required list, so the completeness rule holds even for a
-  // caller that never went through this page.
   metadata.sourceRegisters = [...joined.sources];
   metadata.importBatchId = importBatchId;
   metadata.importedAt = new Date().toISOString();
-
   if (folder) {
     metadata.sourceFolder = folder.folderName;
     if (folder.ragStatus) metadata.ragStatus = folder.ragStatus;
     if (folder.isRevised) metadata.isRevised = true;
-    if (folder.appType) metadata.appTypeCode = folder.appType;
   }
-  if (row.selectedCatalogue) {
-    metadata.catalogueFile = row.selectedCatalogue.name;
-  }
+  if (row.selectedCatalogue) metadata.catalogueFile = row.selectedCatalogue.name;
 
   return metadata;
 }
@@ -201,7 +254,8 @@ export const REGISTER_SHORT_NAMES: Record<RegisterRole, string> = {
 /**
  * Why a row cannot be committed, or null when it is fine.
  *
- * `requiredRoles` is the set of registers actually uploaded. A case must be
+ * Two rules, both of which the caller opts into. `requiredRoles` is the set
+ * of registers actually uploaded. A case must be
  * present in every one of them: the three registers hold different halves of
  * the same case — the decision, the applicant's product and cost, the admin
  * trail — so a case missing from one of them goes into the corpus with holes
@@ -212,6 +266,7 @@ export const REGISTER_SHORT_NAMES: Record<RegisterRole, string> = {
 export function rowBlocker(
   row: ImportRow,
   requiredRoles: RegisterRole[] = [],
+  requireCatalogue = true,
 ): string | null {
   const present = new Set(row.joined.sources);
   const missing = requiredRoles.filter((role) => !present.has(role));
@@ -225,5 +280,14 @@ export function rowBlocker(
   if (!appPName) return "no product name in any register";
   const justification = cleanValue(row.joined.eg?.["Q12b_Jus"]);
   if (!justification) return "no EG justification (Q12b_Jus)";
+
+  // A case with no catalogue description is half of what the search matches
+  // on — it can only ever be found by product name. Requiring one keeps the
+  // corpus to cases that are actually useful as precedent.
+  if (requireCatalogue && !cleanValue(row.catalogueDesc)) {
+    if (!row.selectedCatalogue) return "no catalogue file for this case";
+    if (row.extraction.status === "failed") return "catalogue extraction failed";
+    return "catalogue not extracted yet";
+  }
   return null;
 }

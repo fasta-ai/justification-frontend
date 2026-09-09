@@ -72,11 +72,16 @@ export function identifyRegister(columns: string[]): RegisterRole | null {
  * file the signature could not place.
  */
 export function parseRegisterWorkbook(
-  data: ArrayBuffer,
+  data: ArrayBuffer | Uint8Array,
   fileName: string,
   role?: RegisterRole,
 ): ParsedRegister {
-  const workbook = XLSX.read(data, { type: "array" });
+  // SheetJS's "array" type wants a Uint8Array. Browsers happen to tolerate a
+  // bare ArrayBuffer, but Node does not — it reads the raw zip container as a
+  // text sheet and the header row comes back as "PK\x03\x04…". Normalising
+  // here keeps the parser identical in the browser and under test.
+  const bytes = data instanceof Uint8Array ? data : new Uint8Array(data);
+  const workbook = XLSX.read(bytes, { type: "array" });
   const sheetName = workbook.SheetNames[0];
   if (!sheetName) throw new Error(`${fileName}: workbook has no sheets`);
 

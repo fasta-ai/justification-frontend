@@ -26,3 +26,5 @@ yarn-error.log*
 *.tsbuildinfo
 next-env.d.tstest-results/
 playwright-report/
+
+.env.local

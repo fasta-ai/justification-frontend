@@ -22,7 +22,6 @@ interface Props {
   rows: ImportRow[];
   folders: CaseFolder[];
   onAttach: (files: File[]) => void;
-  onSkip: () => void;
   onSelectCatalogue: (key: string, file: ClassifiedFile | null) => void;
   onBack: () => void;
   onContinue: () => void;
@@ -32,7 +31,6 @@ export function StepDocuments({
   rows,
   folders,
   onAttach,
-  onSkip,
   onSelectCatalogue,
   onBack,
   onContinue,
@@ -64,17 +62,17 @@ export function StepDocuments({
             in your browser and classified by name; only the one catalogue you
             settle on per case is ever uploaded.
           </p>
+          <p className="text-sm text-muted-foreground">
+            A folder is required: only cases that end up with a catalogue
+            description are imported, so a case with no catalogue is left out.
+          </p>
 
           <div className="flex flex-wrap gap-2">
             <Button onClick={() => inputRef.current?.click()}>
               <FolderOpen className="w-4 h-4 mr-2" />
               {attached ? "Choose a different folder" : "Choose folder"}
             </Button>
-            {!attached && (
-              <Button variant="outline" onClick={onSkip}>
-                Skip — import registers only
-              </Button>
-            )}
+
             <input
               ref={inputRef}
               type="file"
@@ -174,7 +172,7 @@ export function StepDocuments({
         <Button variant="ghost" onClick={onBack}>
           Back
         </Button>
-        <Button onClick={onContinue} disabled={rows.length === 0}>
+        <Button onClick={onContinue} disabled={!attached}>
           Continue to extraction
         </Button>
       </div>

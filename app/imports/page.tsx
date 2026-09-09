@@ -135,10 +135,6 @@ function ImportsPage() {
               rows={importer.rows}
               folders={importer.folders}
               onAttach={importer.attachFolder}
-              onSkip={() => {
-                importer.skipFolders();
-                setStep("review");
-              }}
               onSelectCatalogue={importer.selectCatalogue}
               onBack={() => setStep("tranches")}
               onContinue={() => setStep("extraction")}
@@ -148,6 +144,9 @@ function ImportsPage() {
           {step === "extraction" && (
             <StepExtraction
               rows={importer.rows}
+              requiredRoles={importer.requiredRoles}
+              onLimitToFirst={importer.limitToFirst}
+              onClearLimit={importer.clearLimit}
               isExtracting={importer.isExtracting}
               concurrency={importer.concurrency}
               onConcurrencyChange={importer.setConcurrency}
@@ -162,6 +161,7 @@ function ImportsPage() {
             <StepReview
               rows={importer.rows}
               requiredRoles={importer.requiredRoles}
+              requireCatalogue={importer.requireCatalogue}
               batchId={importer.batchId}
               isBusy={importer.isBusy}
               commitProgress={importer.commitProgress}

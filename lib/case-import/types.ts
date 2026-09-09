@@ -103,6 +103,13 @@ export interface ImportRow {
   selectedCatalogue: ClassifiedFile | null;
   /** Filled by extraction; empty for register-only rows. */
   catalogueDesc: string;
+  /**
+   * The extractor's full reply — `{ products: [...], description }`. The
+   * summary alone loses the structured product rows (model, functions,
+   * dimensions, usage capacity), which the corpus has always stored under
+   * `catalogue_data` and which are useful well beyond similarity search.
+   */
+  catalogueData: CatalogueExtraction | null;
   extraction: {
     status: "idle" | "queued" | "running" | "done" | "failed" | "skipped";
     error?: string;
@@ -116,3 +123,17 @@ export interface ImportRow {
 
 /** The object written to `datasets.metadata`. */
 export type DatasetMetadata = Record<string, unknown>;
+
+/** Shape returned by the Python catalogue extractor. */
+export interface CatalogueExtraction {
+  description?: string;
+  products?: {
+    product_name?: string;
+    model?: string;
+    functions?: string[];
+    description?: string;
+    product_size?: string;
+    usage_capacity?: string;
+  }[];
+  [key: string]: unknown;
+}

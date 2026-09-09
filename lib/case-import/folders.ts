@@ -171,7 +171,7 @@ export function groupIntoCaseFolders(files: File[]): CaseFolder[] {
     const parsed = parseFolderName(folderName);
     const catalogueCandidates = folderFiles
       .filter((f) => f.kind === "catalogue")
-      .sort(byConfidenceThenSize);
+      .sort(byConfidenceThenDepthThenSize);
 
     folders.push({
       folderName,
@@ -187,11 +187,29 @@ export function groupIntoCaseFolders(files: File[]): CaseFolder[] {
   return folders.sort((a, b) => a.folderName.localeCompare(b.folderName));
 }
 
-/** High confidence first, then largest file: catalogues are the fat PDFs. */
-function byConfidenceThenSize(a: ClassifiedFile, b: ClassifiedFile): number {
+/** How deep inside the case folder a file sits. Root-level files are depth 0. */
+export function fileDepth(file: ClassifiedFile): number {
+  return file.path.split("/").length - 1;
+}
+
+/**
+ * Best candidate first: confidence, then shallowest, then largest.
+ *
+ * Depth matters because 129 of the 291 T12 folders carry a `Re_<date>`
+ * subfolder — the attachments from an email reply. Those often hold a second
+ * copy of the catalogue (`1039P-Catalogue.2.pdf`), so a naive ranking sees two
+ * equally good files and has to ask. The submission at the case-folder root is
+ * the primary one; a reply attachment is supplementary.
+ */
+function byConfidenceThenDepthThenSize(
+  a: ClassifiedFile,
+  b: ClassifiedFile,
+): number {
   const rank = (c: ClassifyConfidence) => (c === "high" ? 0 : c === "medium" ? 1 : 2);
-  const diff = rank(a.confidence) - rank(b.confidence);
-  if (diff !== 0) return diff;
+  const byConfidence = rank(a.confidence) - rank(b.confidence);
+  if (byConfidence !== 0) return byConfidence;
+  const byDepth = fileDepth(a) - fileDepth(b);
+  if (byDepth !== 0) return byDepth;
   return b.size - a.size;
 }
 
