@@ -20,11 +20,33 @@ import {
 } from "@/components/ui/command";
 import { Input } from "@/components/ui/input";
 
+/** A picker option: `value` is what gets stored, `label` is what users see. */
+export interface EgOption {
+  value: string;
+  label: string;
+}
+
+/** Fixed options for Q12a — short Yes/No/NA// list. */
+export const Q12A_OPTIONS: readonly EgOption[] = ["Yes", "No", "NA", "/"].map(
+  (v) => ({ value: v, label: v }),
+);
+
 /**
- * Fixed options for Q12f_RReject. Also used for Q12a per user request -
- * both fields now share the same short Yes/No/NA// list.
+ * Fixed options for Q12f_RReject, per the EG form's rejection-reason list.
+ * Each option is stored verbatim as its full label.
  */
-export const Q12F_RREJECT_OPTIONS: readonly string[] = ["Yes", "No", "NA", "/"];
+export const Q12F_RREJECT_OPTIONS: readonly EgOption[] = [
+  "1 - not belonging to innovative and technology products",
+  "2 - non-intact system comprising an assortment of self-selected components and lacking system integrity",
+  "3 - items with safety issue",
+  "4 - items with insufficient proof of efficacy",
+  "5 - items beyond the scope of the I&T Fund",
+  "6 - health monitoring gadgets not connected to monitoring/record system for further systematic and consistent analysis",
+  "7 - standalone items",
+  "8 - excessive collection of personal data",
+  "Others",
+  "NA",
+].map((v) => ({ value: v, label: v }));
 
 /**
  * Legacy stringy-nulls (e.g. Python `float('nan')` serialised as "nan") show
@@ -40,7 +62,7 @@ export function normalizeNaLike(value: any): string {
 
 interface OptionComboboxProps {
   value: string;
-  options: readonly string[];
+  options: readonly EgOption[];
   onChange: (next: string) => void;
   placeholder?: string;
   /** Placeholder for the free-text input inside the popover. */
@@ -51,9 +73,9 @@ interface OptionComboboxProps {
 
 /**
  * Combobox-style picker over a fixed option list that also accepts free
- * text. The trigger button always shows the current raw value (preserving
- * legacy data verbatim). Inside the popover the user can either pick a
- * canned option or type any custom string.
+ * text. The trigger button shows the matching option's label, or the raw
+ * value verbatim for legacy/custom data. Inside the popover the user can
+ * either pick a canned option or type any custom string.
  */
 function OptionCombobox({
   value,
@@ -66,16 +88,30 @@ function OptionCombobox({
 }: OptionComboboxProps) {
   const [open, setOpen] = useState(false);
   const [draft, setDraft] = useState("");
+  const [query, setQuery] = useState("");
   const normalized = normalizeNaLike(value);
-  const isKnown = options.includes(normalized);
-  const isCustom = normalized.length > 0 && !isKnown;
+  const selectedOption = options.find((opt) => opt.value === normalized);
+  const isCustom = normalized.length > 0 && !selectedOption;
+  // Filter here rather than in cmdk: cmdk re-sorts items by match score while
+  // searching and never restores the original order once the search clears.
+  const needle = query.trim().toLowerCase();
+  const visibleOptions = needle
+    ? options.filter((opt) => opt.label.toLowerCase().includes(needle))
+    : options;
 
   return (
     <Popover
+      // These pickers live inside Dialogs, whose scroll lock swallows wheel /
+      // trackpad events on the portaled popover. A modal popover takes over
+      // the lock, so its own list scrolls.
+      modal
       open={open}
       onOpenChange={(next) => {
         setOpen(next);
-        if (next) setDraft(isCustom ? normalized : "");
+        if (next) {
+          setDraft(isCustom ? normalized : "");
+          setQuery("");
+        }
       }}
     >
       <PopoverTrigger asChild>
@@ -92,27 +128,34 @@ function OptionCombobox({
           )}
         >
           <span className="truncate text-left">
-            {normalized || placeholder || "Select…"}
+            {selectedOption?.label || normalized || placeholder || "Select…"}
           </span>
           <ChevronsUpDown className="ml-2 h-3 w-3 shrink-0 opacity-50" />
         </Button>
       </PopoverTrigger>
       <PopoverContent className="w-[360px] p-0" align="start">
-        <Command>
-          <CommandInput placeholder="Search options…" />
-          <CommandList>
+        <Command shouldFilter={false}>
+          <CommandInput
+            placeholder="Search options…"
+            value={query}
+            onValueChange={setQuery}
+          />
+          {/* Always-visible scrollbar (macOS hides overlay scrollbars) so it's
+              clear the list continues past the fold. */}
+          <CommandList className="[&::-webkit-scrollbar]:w-2 [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb]:bg-muted-foreground/30 [&::-webkit-scrollbar-track]:bg-transparent">
             <CommandEmpty>No matching option.</CommandEmpty>
             <CommandGroup>
-              {options.map((opt) => {
-                const isSelected = normalized === opt;
+              {visibleOptions.map((opt) => {
+                const isSelected = normalized === opt.value;
                 return (
                   <CommandItem
-                    key={opt}
-                    value={opt}
+                    key={opt.value}
+                    // Search matches against the label, which includes the value.
+                    value={opt.label}
                     onSelect={() => {
                       // Only propagate when the value actually changes —
                       // otherwise callers flip a dirty flag for nothing.
-                      if (opt !== normalized) onChange(opt);
+                      if (opt.value !== normalized) onChange(opt.value);
                       setOpen(false);
                     }}
                     className="text-xs items-start"
@@ -123,7 +166,7 @@ function OptionCombobox({
                         isSelected ? "opacity-100" : "opacity-0",
                       )}
                     />
-                    <span className="flex-1">{opt}</span>
+                    <span className="flex-1">{opt.label}</span>
                   </CommandItem>
                 );
               })}
@@ -181,15 +224,14 @@ interface Q12SelectProps {
 }
 
 /**
- * Q12a picker — now uses the same Yes / No / NA / / list as Q12f per user
- * request. Legacy long-form reason values are preserved verbatim and remain
- * editable via free text.
+ * Q12a picker — Yes / No / NA / /. Legacy long-form reason values are
+ * preserved verbatim and remain editable via free text.
  */
 export function Q12aSelect({ value, onChange, className }: Q12SelectProps) {
   return (
     <OptionCombobox
       value={value}
-      options={Q12F_RREJECT_OPTIONS}
+      options={Q12A_OPTIONS}
       onChange={onChange}
       placeholder="Select reason…"
       freeTextPlaceholder="e.g. Yes, No, /, or free text"
@@ -199,8 +241,9 @@ export function Q12aSelect({ value, onChange, className }: Q12SelectProps) {
 }
 
 /**
- * Q12f_RReject picker — Yes / No / NA / /, plus free text for legacy
- * long-form rejection justifications.
+ * Q12f_RReject picker — rejection reasons 1–8, Others, NA (stored as the
+ * full label text), plus free text for legacy long-form rejection
+ * justifications.
  */
 export function Q12fRejectSelect({
   value,
