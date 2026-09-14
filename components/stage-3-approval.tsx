@@ -100,7 +100,9 @@ import {
   type JustificationInputs,
   type SaveDraftPayload,
   type GenerateResult,
+  type DecisionDetails,
   getCatalogueDescription,
+  getEgSearchKeys,
 } from "@/components/justification-modal";
 import { CaseAuditLogDialog } from "@/components/case-audit-log-dialog";
 import { toast } from "sonner";
@@ -604,14 +606,19 @@ export function Stage3Approval({ onBack, onComplete }: Stage3ApprovalProps) {
   >("approved");
   const [justificationModalSeed, setJustificationModalSeed] =
     useState<SimilarJustification | null>(null);
+  // Manual decision: reviewer enters details + justification, no AI / search.
+  const [justificationModalManual, setJustificationModalManual] =
+    useState(false);
 
   const openJustificationModal = useCallback(
     (
       decision: "approved" | "rejected",
       seed: SimilarJustification | null = null,
+      manual = false,
     ) => {
       setJustificationModalDecision(decision);
       setJustificationModalSeed(seed);
+      setJustificationModalManual(manual);
       setPendingDecision(decision);
       setIsJustificationModalOpen(true);
     },
@@ -945,15 +952,12 @@ export function Stage3Approval({ onBack, onComplete }: Stage3ApprovalProps) {
       // description pulls the query into the same neighbourhood as the case
       // whose EG form we want to copy.
       const eg = (selectedCase.egData || {}) as Record<string, string>;
-      const egName = eg.App_PName || eg.App_PNam_Mod || "";
+      const egKeys = getEgSearchKeys(selectedCase);
+      const egName = egKeys.name;
       const egDesc = eg.catalogueDesc || getCatalogueDescription(selectedCase);
       const paCat = String(selectedCase.applicationData?.PA_Cat ?? "");
 
-      console.log("Searching for similar cases with:", {
-        paPName,
-        paModNo,
-        egName,
-      });
+      console.log("Searching for similar cases with:", egKeys);
 
       // Call the similar matches API and use the returned results directly.
       // Reading the `matches` state here would be stale (it only updates on the
@@ -968,6 +972,8 @@ export function Stage3Approval({ onBack, onComplete }: Stage3ApprovalProps) {
           tranche: selectedCase.tranche || "",
           PA_Elaborate: paElaborate,
           egName,
+          egModel: egKeys.model,
+          egBrand: egKeys.brand,
           egDesc,
         },
         datasetName: "Justification Creation",
@@ -1058,7 +1064,8 @@ export function Stage3Approval({ onBack, onComplete }: Stage3ApprovalProps) {
           const paPName = selectedCase.applicationData?.PA_PName || "";
           const paModNo = selectedCase.applicationData?.PA_Mod_No || "";
           const eg = (selectedCase.egData || {}) as Record<string, string>;
-          const egName = eg.App_PName || eg.App_PNam_Mod || "";
+          const egKeys = getEgSearchKeys(selectedCase);
+          const egName = egKeys.name;
           const egDesc =
             eg.catalogueDesc || getCatalogueDescription(selectedCase);
 
@@ -1087,6 +1094,8 @@ export function Stage3Approval({ onBack, onComplete }: Stage3ApprovalProps) {
                   selectedCase.applicationData?.PA_Justify ||
                   "",
                 egName,
+                egModel: egKeys.model,
+                egBrand: egKeys.brand,
                 egDesc,
               },
               datasetName: "Justification Creation",
@@ -1220,6 +1229,8 @@ export function Stage3Approval({ onBack, onComplete }: Stage3ApprovalProps) {
               tranche: inputs.tranche,
               PA_Elaborate: inputs.PA_Elaborate,
               egName: inputs.egName,
+              egModel: inputs.egModel,
+              egBrand: inputs.egBrand,
               egDesc: inputs.egDesc,
             },
             datasetName: "Justification Creation",
@@ -1332,9 +1343,15 @@ export function Stage3Approval({ onBack, onComplete }: Stage3ApprovalProps) {
     async (
       justification: string,
       explicitDecision?: "approved" | "rejected",
+      details?: DecisionDetails,
     ) => {
       const decision = explicitDecision ?? pendingDecision;
       if (!decision || !justification.trim()) return;
+      // Details were entered for the case open in the modal only; the other
+      // selected cases get just the status and justification.
+      const detailsCaseId = selectedCase?.id;
+      const appPatch = details?.applicationPatch ?? {};
+      const hasAppPatch = Object.keys(appPatch).length > 0;
 
       try {
         setIsGeneratingJustification(true);
@@ -1360,12 +1377,21 @@ export function Stage3Approval({ onBack, onComplete }: Stage3ApprovalProps) {
           // Copy / Edit views see the same text the reviewer confirmed.
           // Fire in parallel with the status update — status endpoint owns
           // the case.justification field; save endpoint owns egData.
+          const withDetails = caseId === detailsCaseId;
           const mergedEg = {
             ...(selectedCase.egData || {}),
+            ...(withDetails ? details?.egPatch : {}),
             Q12b_Jus: justification,
           };
+          const saveDto: SaveCaseDataDto = { egData: mergedEg };
+          if (withDetails && hasAppPatch) {
+            saveDto.applicationData = {
+              ...(selectedCase.applicationData || {}),
+              ...appPatch,
+            };
+          }
           const [, statusResult] = await Promise.all([
-            saveCaseData(caseId, { egData: mergedEg }).catch((err) => {
+            saveCaseData(caseId, saveDto).catch((err) => {
               console.error(`egData write failed for ${caseId}`, err);
               return { success: false } as const;
             }),
@@ -1447,6 +1473,7 @@ export function Stage3Approval({ onBack, onComplete }: Stage3ApprovalProps) {
     [
       pendingDecision,
       selectedProducts,
+      selectedCase,
       cases,
       setCases,
       updateCaseStatus,
@@ -2796,11 +2823,40 @@ export function Stage3Approval({ onBack, onComplete }: Stage3ApprovalProps) {
                     </Button>
                   </div>
 
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                    <Button
+                      type="button"
+                      variant="outline"
+                      onClick={() =>
+                        openJustificationModal("approved", null, true)
+                      }
+                      disabled={isUpdatingCase || isGeneratingJustification}
+                      className="gap-2 border-success/50 text-success hover:bg-success hover:text-success-foreground"
+                    >
+                      <Edit className="w-4 h-4" />
+                      Manual Approve
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      onClick={() =>
+                        openJustificationModal("rejected", null, true)
+                      }
+                      disabled={isUpdatingCase || isGeneratingJustification}
+                      className="gap-2 border-destructive/50 text-destructive hover:bg-destructive hover:text-destructive-foreground"
+                    >
+                      <Edit className="w-4 h-4" />
+                      Manual Reject
+                    </Button>
+                  </div>
+
                   <p className="text-xs text-muted-foreground">
                     Approve or Reject opens the justification workspace where
                     you can review inputs, generate with AI, edit, and confirm.
-                    Similar Cases loads matching records with Copy and
-                    Justification actions on each row.
+                    Manual Approve / Reject skips similar cases and AI: enter
+                    the details and justification yourself. Similar Cases loads
+                    matching records with Copy and Justification actions on
+                    each row.
                   </p>
                 </div>
               ) : (
@@ -3241,8 +3297,8 @@ export function Stage3Approval({ onBack, onComplete }: Stage3ApprovalProps) {
           isUpdating: isUpdatingCase,
           isSavingDraft,
           onGenerate: generateJustificationWithInputs,
-          onConfirm: async (justificationText, decision) => {
-            await handleConfirmDecision(justificationText, decision);
+          onConfirm: async (justificationText, decision, details) => {
+            await handleConfirmDecision(justificationText, decision, details);
             setIsReplaceDialogOpen(false);
           },
           onSaveDraft: handleSaveJustificationDraft,
@@ -3267,6 +3323,7 @@ export function Stage3Approval({ onBack, onComplete }: Stage3ApprovalProps) {
         onGenerate={generateJustificationWithInputs}
         onConfirm={handleConfirmDecision}
         onSaveDraft={handleSaveJustificationDraft}
+        manual={justificationModalManual}
       />
 
       {/* Audit Log Dialog */}

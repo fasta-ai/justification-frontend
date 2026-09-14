@@ -16,6 +16,9 @@ interface SimilarMatchItem {
    *  alongside the application PA_* fields to enrich the semantic query so it
    *  lands in the same embedding space the dataset rows were built from. */
   egName?: string;
+  /** EG-form model number / brand — preferred over PA_Mod_No / PA_Brand. */
+  egModel?: string;
+  egBrand?: string;
   egDesc?: string;
   desc?: string;
   [key: string]: any;
@@ -93,20 +96,23 @@ export function useSimilarMatches(): UseSimilarMatchesReturn {
         const token = localStorage.getItem("authToken") || "";
         const item = options.item || {};
 
+        const egName = item.egName?.trim() || "";
+        const paName = item.PA_PName?.trim() || "";
         const body = {
-          // Application product name is the primary exact/fuzzy key.
-          productName: item.PA_PName || item.egName || "",
-          modelNo: item.PA_Mod_No || undefined,
-          brand: item.PA_Brand || undefined,
+          // EG form product name / model / brand are the search keys; the
+          // application (PA_*) values only fill in when the EG form is blank.
+          productName: egName || paName,
+          modelNo: item.egModel || item.PA_Mod_No || undefined,
+          brand: item.egBrand || item.PA_Brand || undefined,
           elaborate: item.PA_Elaborate || item.PA_Justify || item.desc || undefined,
           // EG form name/description appended to the semantic query only —
           // mirrors App_PName + catalogueDesc so the query embeds into the
           // same neighbourhood as the catalogue/EG rows we want to copy from.
           extraText: [item.egName, item.egDesc].filter(Boolean).join(" ") || undefined,
-          // EG product name on its own: an extra tier-2 (fuzzy) query variant,
-          // weighted below PA_PName. Kept separate from extraText so the short
-          // name is not diluted by the description for trigram scoring.
-          egName: item.egName || undefined,
+          // Secondary name: an extra tier-2 (fuzzy) query variant weighted
+          // below productName — the application name when the EG name leads.
+          // The backend drops it when identical to productName.
+          egName: (egName ? paName : "") || undefined,
           category:
             item.PA_Cat && item.PA_Cat.trim() && item.PA_Cat.trim() !== "/"
               ? item.PA_Cat.trim()
@@ -119,7 +125,7 @@ export function useSimilarMatches(): UseSimilarMatchesReturn {
 
         if (!body.productName) {
           throw new Error(
-            "Cannot search similar cases without a product name (PA_PName or EG App_PName)",
+            "Cannot search similar cases without a product name (EG App_PName or PA_PName)",
           );
         }
 

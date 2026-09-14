@@ -47,6 +47,7 @@ import {
   resolveSourceValue,
   resolveTargetSlot,
 } from "@/lib/case-field-mapping";
+import { RECORD_ADMIN_COLUMNS } from "@/lib/eg-excel-export";
 
 interface SimilarCaseReplaceDialogProps {
   open: boolean;
@@ -102,6 +103,18 @@ const egFields = [
   "Q12g_JRem",
 ];
 
+// Record Admin register columns, also stored on egData. Identity/entry-date
+// columns (they belong to the similar case, not this one) and columns already
+// on the EG Form tab are left out.
+const RECORD_ADMIN_SKIP = new Set([
+  "SWD_Ref", "App_No", "MRef", "App_Type", "App_Cat", "DatEntry",
+]);
+const recordAdminFields = RECORD_ADMIN_COLUMNS.filter(
+  (c) => !RECORD_ADMIN_SKIP.has(c) && !egFields.includes(c),
+);
+
+type CopyTab = ReplacementSection | "recordAdmin";
+
 const appFields = [
   "PA_RefL",
   "PA_Cat",
@@ -127,12 +140,6 @@ const catalogueFields = [
   "usage_capacity",
   "description",
 ];
-
-const sectionLabels: Record<ReplacementSection, string> = {
-  eg: "EG Form",
-  application: "Application",
-  catalogue: "Catalogue",
-};
 
 function formatValue(value: any): string {
   if (value === null || value === undefined || value === "") return "—";
@@ -204,13 +211,36 @@ export function SimilarCaseReplaceDialog({
     useCaseAuditLogs();
   const [step, setStep] = useState<1 | 2 | 3>(1);
   const [replacements, setReplacements] = useState<FieldReplacement[]>([]);
-  const [activeTab, setActiveTab] = useState<ReplacementSection>("eg");
+  const [activeTab, setActiveTab] = useState<CopyTab>("eg");
 
-  const fieldGroups: { section: ReplacementSection; fields: string[] }[] = useMemo(
+  // Record Admin columns live on egData, so that tab writes to the "eg"
+  // section; `tab` distinguishes it from the EG Form tab.
+  const fieldGroups: {
+    tab: CopyTab;
+    section: ReplacementSection;
+    label: string;
+    fields: string[];
+  }[] = useMemo(
     () => [
-      { section: "eg", fields: egFields },
-      { section: "application", fields: appFields },
-      { section: "catalogue", fields: catalogueFields },
+      { tab: "eg", section: "eg", label: "EG Form", fields: egFields },
+      {
+        tab: "recordAdmin",
+        section: "eg",
+        label: "Record Admin",
+        fields: recordAdminFields,
+      },
+      {
+        tab: "application",
+        section: "application",
+        label: "Application",
+        fields: appFields,
+      },
+      {
+        tab: "catalogue",
+        section: "catalogue",
+        label: "Catalogue",
+        fields: catalogueFields,
+      },
     ],
     [],
   );
@@ -275,18 +305,20 @@ export function SimilarCaseReplaceDialog({
     );
   }
 
-  function handleUseAllInSection(section: ReplacementSection) {
-    if (!similarCase?.metadata || !originalCase) return;
+  const inGroup = (
+    r: FieldReplacement,
+    group: { section: ReplacementSection; fields: string[] },
+  ) => r.section === group.section && group.fields.includes(r.fieldName);
 
-    const fields =
-      section === "eg"
-        ? egFields
-        : section === "application"
-          ? appFields
-          : catalogueFields;
+  function handleUseAllInSection(group: {
+    section: ReplacementSection;
+    fields: string[];
+  }) {
+    if (!similarCase?.metadata || !originalCase) return;
+    const { section, fields } = group;
 
     setReplacements((prev) => {
-      const withoutSection = prev.filter((r) => r.section !== section);
+      const withoutSection = prev.filter((r) => !inGroup(r, group));
       const sectionReplacements = fields
         .map((fieldName) => ({
           section,
@@ -313,8 +345,11 @@ export function SimilarCaseReplaceDialog({
     );
   }
 
-  function handleRestoreAllInSection(section: ReplacementSection) {
-    setReplacements((prev) => prev.filter((r) => r.section !== section));
+  function handleRestoreAllInSection(group: {
+    section: ReplacementSection;
+    fields: string[];
+  }) {
+    setReplacements((prev) => prev.filter((r) => !inGroup(r, group)));
   }
 
   async function handleConfirm() {
@@ -615,18 +650,22 @@ export function SimilarCaseReplaceDialog({
 
         <Tabs
           value={activeTab}
-          onValueChange={(v) => setActiveTab(v as ReplacementSection)}
+          onValueChange={(v) => setActiveTab(v as CopyTab)}
           className="flex-1 min-h-0 flex flex-col"
         >
-          <TabsList className="grid w-full grid-cols-3 shrink-0">
-            <TabsTrigger value="eg">EG Form</TabsTrigger>
-            <TabsTrigger value="application">Application</TabsTrigger>
-            <TabsTrigger value="catalogue">Catalogue</TabsTrigger>
+          <TabsList className="grid w-full grid-cols-4 shrink-0">
+            {fieldGroups.map((g) => (
+              <TabsTrigger key={g.tab} value={g.tab}>
+                {g.label}
+              </TabsTrigger>
+            ))}
           </TabsList>
-          {fieldGroups.map(({ section, fields }) => (
+          {fieldGroups.map((group) => {
+            const { tab, section, fields } = group;
+            return (
             <TabsContent
-              key={section}
-              value={section}
+              key={tab}
+              value={tab}
               className="mt-4 flex-1 min-h-0 flex flex-col"
             >
               <div className="flex items-center justify-between mb-2 shrink-0">
@@ -643,7 +682,7 @@ export function SimilarCaseReplaceDialog({
                     variant="outline"
                     size="sm"
                     className="h-7 text-xs px-2"
-                    onClick={() => handleUseAllInSection(section)}
+                    onClick={() => handleUseAllInSection(group)}
                   >
                     Use all
                   </Button>
@@ -651,7 +690,7 @@ export function SimilarCaseReplaceDialog({
                     variant="outline"
                     size="sm"
                     className="h-7 text-xs px-2"
-                    onClick={() => handleRestoreAllInSection(section)}
+                    onClick={() => handleRestoreAllInSection(group)}
                   >
                     Restore all
                   </Button>
@@ -672,7 +711,8 @@ export function SimilarCaseReplaceDialog({
                 </div>
               </ScrollArea>
             </TabsContent>
-          ))}
+            );
+          })}
         </Tabs>
 
         <div className="flex justify-start items-center pt-3 border-t shrink-0">
@@ -698,19 +738,20 @@ export function SimilarCaseReplaceDialog({
 
         <ScrollArea className="max-h-[45vh] pr-2">
           <div className="space-y-5">
-            {fieldGroups.map(({ section, fields }) => {
+            {fieldGroups.map((group) => {
+              const { tab, section, label } = group;
               const sectionReplacements = replacements.filter((r) =>
-                fields.includes(r.fieldName),
+                inGroup(r, group),
               );
               if (sectionReplacements.length === 0) return null;
 
               return (
-                <div key={section} className="space-y-2">
+                <div key={tab} className="space-y-2">
                   <h4 className="text-sm font-semibold flex items-center gap-2">
                     <Badge variant="secondary" className="text-[10px] px-1.5">
                       {getSectionIcon(section)}
                     </Badge>
-                    {sectionLabels[section]}
+                    {label}
                     <Badge variant="outline" className="text-xs">
                       {sectionReplacements.length}
                     </Badge>

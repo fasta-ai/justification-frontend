@@ -39,6 +39,8 @@ import {
 import { cn } from "@/lib/utils";
 import type { Case } from "@/app/api/cases/types";
 import type { SimilarJustification } from "@/lib/types";
+import { splitProductAndModel } from "@/lib/case-import/normalise";
+import { Q12fRejectSelect } from "@/components/eg-field-select";
 
 export interface JustificationInputs {
   PA_PName: string;
@@ -50,8 +52,53 @@ export interface JustificationInputs {
   tranche: string;
   PA_Elaborate: string;
   egName: string;
+  /** EG-form model number / brand. Search keys only — not written back. */
+  egModel: string;
+  egBrand: string;
   egDesc: string;
   Q12b_Jus: string;
+  /** EG decision fields the reviewer fills in (manually or after AI). */
+  Q12c_TotC: string;
+  Q12d_Quo: string;
+  Q12e_JCost: string;
+  Q12f_RReject: string;
+  Q12g_JRem: string;
+}
+
+/** EG decision fields saved back to egData verbatim when edited. */
+const EG_DECISION_FIELDS = [
+  "Q12c_TotC",
+  "Q12d_Quo",
+  "Q12e_JCost",
+  "Q12f_RReject",
+  "Q12g_JRem",
+] as const;
+
+/** Edits made in the panel, saved alongside the justification on confirm. */
+export interface DecisionDetails {
+  egPatch: Record<string, string>;
+  applicationPatch: Record<string, unknown>;
+}
+
+/**
+ * Similar-case search keys taken from the EG form. The record-admin
+ * `App_PNam_Mod` holds "<name> / <model>", so it supplies the model (and the
+ * name when `App_PName` is blank). The EG form has no brand column, so brand
+ * comes from any EG brand field the case carries, else the application's.
+ */
+export function getEgSearchKeys(c: Case | null | undefined): {
+  name: string;
+  model: string;
+  brand: string;
+} {
+  const eg = (c?.egData || {}) as Record<string, any>;
+  const app = (c?.applicationData || {}) as Record<string, any>;
+  const split = splitProductAndModel(eg.App_PNam_Mod);
+  return {
+    name: String(eg.App_PName || split.productName || eg.App_PNam_Mod || "").trim(),
+    model: String(eg.Model_Code || split.modelCode || app.PA_Mod_No || "").trim(),
+    brand: String(eg.App_Brand || eg.PA_Brand || app.PA_Brand || "").trim(),
+  };
 }
 
 /**
@@ -101,8 +148,12 @@ interface JustificationModalProps {
   onConfirm: (
     justification: string,
     decision: "approved" | "rejected",
+    details?: DecisionDetails,
   ) => Promise<void> | void;
   onSaveDraft?: (payload: SaveDraftPayload) => Promise<void> | void;
+  /** Manual decision: no AI generation, details panel open — the reviewer
+   *  enters the case details and justification themselves. */
+  manual?: boolean;
 }
 
 /**
@@ -127,8 +178,12 @@ export interface JustificationPanelProps {
   onConfirm: (
     justification: string,
     decision: "approved" | "rejected",
+    details?: DecisionDetails,
   ) => Promise<void> | void;
   onSaveDraft?: (payload: SaveDraftPayload) => Promise<void> | void;
+  /** Manual decision: no AI generation, details panel open — the reviewer
+   *  enters the case details and justification themselves. */
+  manual?: boolean;
 }
 
 function extractInputs(c: Case | null): JustificationInputs {
@@ -141,12 +196,21 @@ function extractInputs(c: Case | null): JustificationInputs {
       tranche: "",
       PA_Elaborate: "",
       egName: "",
+      egModel: "",
+      egBrand: "",
       egDesc: "",
       Q12b_Jus: "",
+      Q12c_TotC: "",
+      Q12d_Quo: "",
+      Q12e_JCost: "",
+      Q12f_RReject: "",
+      Q12g_JRem: "",
     };
   }
   const app = (c.applicationData || {}) as Record<string, string>;
   const eg = (c.egData || {}) as Record<string, string>;
+  const egKeys = getEgSearchKeys(c);
+  const str = (v: unknown) => (v === undefined || v === null ? "" : String(v));
   return {
     PA_PName: app.PA_PName || "",
     PA_Brand: app.PA_Brand || "",
@@ -155,8 +219,15 @@ function extractInputs(c: Case | null): JustificationInputs {
     tranche: c.tranche || "",
     PA_Elaborate: app.PA_Elaborate || app.PA_Justify || "",
     egName: eg.App_PName || eg.App_PNam_Mod || "",
+    egModel: egKeys.model,
+    egBrand: egKeys.brand,
     egDesc: eg.catalogueDesc || getCatalogueDescription(c),
     Q12b_Jus: eg.Q12b_Jus || "",
+    Q12c_TotC: str(eg.Q12c_TotC),
+    Q12d_Quo: str(eg.Q12d_Quo),
+    Q12e_JCost: str(eg.Q12e_JCost),
+    Q12f_RReject: str(eg.Q12f_RReject),
+    Q12g_JRem: str(eg.Q12g_JRem),
   };
 }
 
@@ -172,6 +243,7 @@ export function JustificationModal({
   onGenerate,
   onConfirm,
   onSaveDraft,
+  manual = false,
 }: JustificationModalProps) {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -179,11 +251,13 @@ export function JustificationModal({
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <Sparkles className="w-5 h-5 text-primary" />
-            Justification — Case {selectedCase?.caseNumber || ""}
+            {manual ? "Manual decision" : "Justification"} — Case{" "}
+            {selectedCase?.caseNumber || ""}
           </DialogTitle>
           <DialogDescription>
-            Review the fields the AI will use, generate a draft, edit it, then
-            save as a draft or confirm your decision.
+            {manual
+              ? "Enter the case details and your own justification, then confirm. No similar-case search or AI is used."
+              : "Review the fields the AI will use, generate a draft, edit it, then save as a draft or confirm your decision."}
           </DialogDescription>
         </DialogHeader>
         <JustificationPanel
@@ -198,6 +272,7 @@ export function JustificationModal({
           onGenerate={onGenerate}
           onConfirm={onConfirm}
           onSaveDraft={onSaveDraft}
+          manual={manual}
         />
       </DialogContent>
     </Dialog>
@@ -221,6 +296,7 @@ export function JustificationPanel({
   onGenerate,
   onConfirm,
   onSaveDraft,
+  manual = false,
 }: JustificationPanelProps) {
   const [decision, setDecision] = useState<"approved" | "rejected">(
     initialDecision,
@@ -254,12 +330,13 @@ export function JustificationPanel({
     setInputs(nextInputs);
     setDraft(nextDraft);
     setHasGeneratedOnce(false);
-    setShowInputs(false);
+    // Manual decisions start with the details open — the reviewer fills them.
+    setShowInputs(manual);
     setAiAdvice(null);
     initialInputsRef.current = nextInputs;
     initialDraftRef.current = nextDraft;
     prefillKeyRef.current = "";
-  }, [open, selectedCase?.id, initialDecision]);
+  }, [open, selectedCase?.id, initialDecision, manual]);
 
   // Prefill the draft + AI advice from the LAST stored generation for this
   // (case × decision × seed) triple. Every generation is persisted server-side
@@ -399,13 +476,21 @@ export function JustificationPanel({
 
   const handleConfirm = async () => {
     if (!canConfirm) return;
-    await onConfirm(draft, decision);
+    // Save the details the reviewer entered alongside the decision, so a
+    // manual approval/rejection keeps them (and the saved copy of the case).
+    await onConfirm(draft, decision, {
+      egPatch: buildEgPatch(),
+      applicationPatch: buildApplicationPatch(),
+    });
   };
 
   const buildEgPatch = (): Record<string, string> => {
     const init = initialInputsRef.current;
     const patch: Record<string, string> = {};
     if (inputs.Q12b_Jus !== init.Q12b_Jus) patch.Q12b_Jus = inputs.Q12b_Jus;
+    for (const field of EG_DECISION_FIELDS) {
+      if (inputs[field] !== init[field]) patch[field] = inputs[field];
+    }
     if (inputs.egName !== init.egName) {
       // Preserve whichever eg product-name key the case originally used.
       const eg = (selectedCase?.egData || {}) as Record<string, string>;
@@ -485,10 +570,26 @@ export function JustificationPanel({
               ) : (
                 <ChevronRight className="w-4 h-4" />
               )}
-              Inputs used for AI generation
+              {manual ? "Case details" : "Inputs used for AI generation"}
             </button>
             {showInputs && (
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div className="space-y-1">
+                  <Label className="text-xs">EG model no. (search key)</Label>
+                  <Input
+                    value={inputs.egModel}
+                    onChange={(e) => updateInput("egModel", e.target.value)}
+                    disabled={isBusy}
+                  />
+                </div>
+                <div className="space-y-1">
+                  <Label className="text-xs">EG brand (search key)</Label>
+                  <Input
+                    value={inputs.egBrand}
+                    onChange={(e) => updateInput("egBrand", e.target.value)}
+                    disabled={isBusy}
+                  />
+                </div>
                 <div className="space-y-1">
                   <Label className="text-xs">Product name (PA_PName)</Label>
                   <Input
@@ -565,6 +666,57 @@ export function JustificationPanel({
             )}
           </div>
 
+          {/* EG decision fields — saved to the EG form on confirm / save. */}
+          <div className="space-y-2">
+            <p className="text-sm font-medium">EG decision details</p>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div className="space-y-1">
+                <Label className="text-xs">Total cost (Q12c_TotC)</Label>
+                <Input
+                  value={inputs.Q12c_TotC}
+                  onChange={(e) => updateInput("Q12c_TotC", e.target.value)}
+                  disabled={isBusy}
+                />
+              </div>
+              <div className="space-y-1">
+                <Label className="text-xs">Quotation (Q12d_Quo)</Label>
+                <Input
+                  value={inputs.Q12d_Quo}
+                  onChange={(e) => updateInput("Q12d_Quo", e.target.value)}
+                  disabled={isBusy}
+                />
+              </div>
+              <div className="space-y-1 sm:col-span-2">
+                <Label className="text-xs">Cost justification (Q12e_JCost)</Label>
+                <Textarea
+                  rows={2}
+                  value={inputs.Q12e_JCost}
+                  onChange={(e) => updateInput("Q12e_JCost", e.target.value)}
+                  disabled={isBusy}
+                />
+              </div>
+              {decision === "rejected" && (
+                <div className="space-y-1 sm:col-span-2">
+                  <Label className="text-xs">Rejection reason (Q12f_RReject)</Label>
+                  <Q12fRejectSelect
+                    value={inputs.Q12f_RReject}
+                    onChange={(next) => updateInput("Q12f_RReject", next)}
+                  />
+                </div>
+              )}
+              <div className="space-y-1 sm:col-span-2">
+                <Label className="text-xs">Remarks (Q12g_JRem)</Label>
+                <Textarea
+                  rows={2}
+                  value={inputs.Q12g_JRem}
+                  onChange={(e) => updateInput("Q12g_JRem", e.target.value)}
+                  disabled={isBusy}
+                />
+              </div>
+            </div>
+          </div>
+
+          {!manual && (
           <div className="flex items-center gap-2">
             <Button
               type="button"
@@ -590,6 +742,7 @@ export function JustificationPanel({
               You can also write or edit the justification directly below.
             </p>
           </div>
+          )}
 
           <Separator />
 
