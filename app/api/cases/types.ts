@@ -71,7 +71,8 @@ export interface FieldReplacement {
 }
 
 export interface ReplaceFromSimilarDto {
-  sourceDatasetId: string;
+  /** Omitted for manual entry (no similar case). */
+  sourceDatasetId?: string;
   replacements: FieldReplacement[];
   actor?: {
     userId?: string;

@@ -21,9 +21,10 @@ export async function POST(
     const { id } = await params;
     const body: ReplaceFromSimilarDto = await request.json();
 
-    if (!body?.sourceDatasetId || !Array.isArray(body?.replacements)) {
+    // sourceDatasetId is omitted for manual entry (no similar case).
+    if (!Array.isArray(body?.replacements)) {
       return NextResponse.json(
-        { success: false, error: "Missing sourceDatasetId or replacements" },
+        { success: false, error: "Missing replacements" },
         { status: 400 },
       );
     }

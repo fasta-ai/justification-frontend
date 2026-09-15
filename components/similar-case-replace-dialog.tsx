@@ -56,6 +56,14 @@ interface SimilarCaseReplaceDialogProps {
   similarCase: SimilarJustification | null;
   onSuccess?: () => void;
   /**
+   * Manual entry: same tabs and fields as a copy, but no similar case — the
+   * reviewer types each value. The justification panel runs without AI and
+   * applies pending field edits before confirming the decision.
+   */
+  manual?: boolean;
+  /** Decision preselected in the justification panel (manual entry). */
+  initialDecision?: "approved" | "rejected";
+  /**
    * When provided, the dialog widens into a two-column layout: the copy
    * workflow on the left and a justification workspace (seeded with the
    * similar case) on the right, so reviewers can reference the justification
@@ -168,7 +176,7 @@ function getOriginalValue(
   fieldName: string,
   originalCase: Case,
 ): any {
-  const target = resolveTargetSlot(section, fieldName);
+  const target = resolveTargetSlot(section, fieldName, originalCase.egData);
   let raw: any;
   if (target.section === "eg") raw = originalCase.egData?.[target.fieldName];
   else if (target.section === "application")
@@ -204,6 +212,8 @@ export function SimilarCaseReplaceDialog({
   similarCase,
   onSuccess,
   justification,
+  manual = false,
+  initialDecision,
 }: SimilarCaseReplaceDialogProps) {
   const { user } = useAuth();
   const { replaceFromSimilar, isLoading } = useReplaceFromSimilar();
@@ -214,7 +224,9 @@ export function SimilarCaseReplaceDialog({
   const [activeTab, setActiveTab] = useState<CopyTab>("eg");
 
   // Record Admin columns live on egData, so that tab writes to the "eg"
-  // section; `tab` distinguishes it from the EG Form tab.
+  // section; `tab` distinguishes it from the EG Form tab. Manual entry only:
+  // they track this case's own paperwork, and similar-case datasets don't
+  // carry them, so there is nothing meaningful to copy.
   const fieldGroups: {
     tab: CopyTab;
     section: ReplacementSection;
@@ -223,12 +235,16 @@ export function SimilarCaseReplaceDialog({
   }[] = useMemo(
     () => [
       { tab: "eg", section: "eg", label: "EG Form", fields: egFields },
-      {
-        tab: "recordAdmin",
-        section: "eg",
-        label: "Record Admin",
-        fields: recordAdminFields,
-      },
+      ...(manual
+        ? [
+            {
+              tab: "recordAdmin" as const,
+              section: "eg" as const,
+              label: "Record Admin",
+              fields: recordAdminFields,
+            },
+          ]
+        : []),
       {
         tab: "application",
         section: "application",
@@ -242,7 +258,7 @@ export function SimilarCaseReplaceDialog({
         fields: catalogueFields,
       },
     ],
-    [],
+    [manual],
   );
 
   const selectedKeys = useMemo(
@@ -353,14 +369,24 @@ export function SimilarCaseReplaceDialog({
   }
 
   async function handleConfirm() {
-    if (!originalCase || !similarCase || replacements.length === 0) return;
+    if (await applyReplacements()) setStep(3);
+  }
+
+  /** Save the pending field edits. True when saved (or nothing to save). */
+  async function applyReplacements(): Promise<boolean> {
+    if (!originalCase || (!similarCase && !manual)) return false;
+    if (replacements.length === 0) return true;
 
     // Translate metadata keys to their real target section/field on the
     // case before sending to backend. Backend writes blindly to
     // `<section>Data[fieldName]`, so mapping happens here. Rules live in
     // lib/case-field-mapping.ts.
     const backendReplacements: FieldReplacement[] = replacements.map((r) => {
-      const target = resolveTargetSlot(r.section, r.fieldName);
+      const target = resolveTargetSlot(
+        r.section,
+        r.fieldName,
+        originalCase.egData,
+      );
       if (target.section === r.section && target.fieldName === r.fieldName) {
         return r;
       }
@@ -368,7 +394,8 @@ export function SimilarCaseReplaceDialog({
     });
 
     const result = await replaceFromSimilar(originalCase.id, {
-      sourceDatasetId: similarCase.id,
+      // No source dataset for manual entry — the audit log records none.
+      sourceDatasetId: manual ? undefined : similarCase?.id,
       replacements: backendReplacements,
     });
 
@@ -376,11 +403,11 @@ export function SimilarCaseReplaceDialog({
       if (originalCase.id) {
         await fetchAuditLogs(originalCase.id);
       }
-      setStep(3);
       onSuccess?.();
-    } else {
-      alert(result.error || "Failed to apply copy");
+      return true;
     }
+    alert(result.error || (manual ? "Failed to save details" : "Failed to apply copy"));
+    return false;
   }
 
   function handleClose() {
@@ -495,6 +522,69 @@ export function SimilarCaseReplaceDialog({
       : originalValue;
     const valuesAreSame =
       formatValue(sourceValue) === formatValue(originalValue);
+
+    // Manual entry: one editable column per field, prefilled with the case's
+    // current value. A field counts as changed once it differs from that.
+    if (manual) {
+      const onManualChange = (next: string) => {
+        if (formatValue(next) === formatValue(originalValue)) {
+          handleRestore(section, fieldName);
+        } else {
+          handleUseValue(section, fieldName, next);
+        }
+      };
+      const value = toEditString(displayValue);
+      const isStaffLabel =
+        section === "eg" && (fieldName === "Staff1" || fieldName === "Staff2");
+      const isStaffInfo =
+        section === "eg" &&
+        (fieldName === "Staff1_Info" || fieldName === "Staff2_Info");
+      return (
+        <div
+          key={`${section}-${fieldName}`}
+          className={cn(
+            "rounded-md border p-3 space-y-1 text-sm",
+            copied && "border-primary/40 ring-1 ring-primary/20 bg-primary/5",
+          )}
+        >
+          <div className="flex items-center justify-between">
+            <span className="text-xs text-muted-foreground">{fieldName}</span>
+            {copied && (
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-6 px-2 text-xs text-muted-foreground hover:text-foreground -my-1"
+                onClick={() => handleRestore(section, fieldName)}
+              >
+                <RotateCcw className="w-3 h-3 mr-1" />
+                Restore
+              </Button>
+            )}
+          </div>
+          {isStaffLabel || isStaffInfo ? (
+            <StaffSelect
+              mode={isStaffLabel ? "label" : "info"}
+              value={value}
+              onSelect={({ label, info }) =>
+                handlePickStaff(fieldName, { label, info })
+              }
+              onChange={onManualChange}
+            />
+          ) : section === "eg" && fieldName === "Q12a" ? (
+            <Q12aSelect value={value} onChange={onManualChange} />
+          ) : section === "eg" && fieldName === "Q12f_RReject" ? (
+            <Q12fRejectSelect value={value} onChange={onManualChange} />
+          ) : (
+            <Textarea
+              value={value}
+              onChange={(e) => onManualChange(e.target.value)}
+              rows={1}
+              className="min-h-[36px] text-sm resize-y"
+            />
+          )}
+        </div>
+      );
+    }
 
     return (
       <div
@@ -628,6 +718,17 @@ export function SimilarCaseReplaceDialog({
   function renderCompareStep() {
     return (
       <div className="flex flex-col gap-4 h-full min-h-0">
+        {manual ? (
+          <div className="p-3 rounded-lg bg-muted/30 border text-sm shrink-0">
+            <div className="text-xs text-muted-foreground mb-0.5">
+              Manual entry — no similar case
+            </div>
+            <p className="font-medium truncate">
+              Case {originalCase?.caseNumber || "—"}: edit any field, then
+              Next to review and save.
+            </p>
+          </div>
+        ) : (
         <div className="flex items-center justify-between p-3 rounded-lg bg-muted/30 border text-sm shrink-0">
           <div className="flex-1 min-w-0 pr-2">
             <div className="text-xs text-muted-foreground mb-0.5">Source (similar case)</div>
@@ -647,13 +748,19 @@ export function SimilarCaseReplaceDialog({
             </p>
           </div>
         </div>
+        )}
 
         <Tabs
           value={activeTab}
           onValueChange={(v) => setActiveTab(v as CopyTab)}
           className="flex-1 min-h-0 flex flex-col"
         >
-          <TabsList className="grid w-full grid-cols-4 shrink-0">
+          <TabsList
+            className={cn(
+              "grid w-full shrink-0",
+              fieldGroups.length === 4 ? "grid-cols-4" : "grid-cols-3",
+            )}
+          >
             {fieldGroups.map((g) => (
               <TabsTrigger key={g.tab} value={g.tab}>
                 {g.label}
@@ -669,6 +776,11 @@ export function SimilarCaseReplaceDialog({
               className="mt-4 flex-1 min-h-0 flex flex-col"
             >
               <div className="flex items-center justify-between mb-2 shrink-0">
+                {manual ? (
+                  <div className="text-xs font-medium text-muted-foreground px-1 flex-1">
+                    This case value
+                  </div>
+                ) : (
                 <div className="grid grid-cols-2 gap-2 text-xs font-medium text-muted-foreground px-1 flex-1">
                   <div className="flex items-center gap-1">
                     Similar case value
@@ -677,7 +789,9 @@ export function SimilarCaseReplaceDialog({
                     This case value
                   </div>
                 </div>
+                )}
                 <div className="flex items-center gap-2 ml-3">
+                  {!manual && (
                   <Button
                     variant="outline"
                     size="sm"
@@ -686,6 +800,7 @@ export function SimilarCaseReplaceDialog({
                   >
                     Use all
                   </Button>
+                  )}
                   <Button
                     variant="outline"
                     size="sm"
@@ -699,12 +814,18 @@ export function SimilarCaseReplaceDialog({
               <ScrollArea className="flex-1 min-h-0 pr-2">
                 <div className="space-y-2">
                   {originalCase &&
-                    similarCase?.metadata &&
+                    (manual || similarCase?.metadata) &&
                     fields.map((fieldName) =>
                       renderFieldRow(
                         section,
                         fieldName,
-                        getSourceValue(section, fieldName, similarCase.metadata),
+                        manual
+                          ? ""
+                          : getSourceValue(
+                              section,
+                              fieldName,
+                              similarCase?.metadata ?? {},
+                            ),
                         getOriginalValue(section, fieldName, originalCase),
                       ),
                     )}
@@ -1012,10 +1133,14 @@ export function SimilarCaseReplaceDialog({
           <div className="flex items-center justify-between gap-3 pr-8">
             <DialogTitle className="flex items-center gap-2">
               {step === 1
-                ? "Copy from Similar Case"
+                ? manual
+                  ? "Manual Decision — Enter Case Details"
+                  : "Copy from Similar Case"
                 : step === 2
                   ? "Preview Changes"
-                  : "Copy Complete"}
+                  : manual
+                    ? "Details Saved"
+                    : "Copy Complete"}
               {step !== 3 && replacements.length > 0 && (
                 <Badge variant="secondary">{replacements.length} changes</Badge>
               )}
@@ -1059,15 +1184,24 @@ export function SimilarCaseReplaceDialog({
                 onClose={handleClose}
                 selectedCase={originalCase}
                 initialDecision={
-                  similarCase?.decision === "rejected" ? "rejected" : "approved"
+                  initialDecision ??
+                  (similarCase?.decision === "rejected" ? "rejected" : "approved")
                 }
                 seedSimilarCase={similarCase}
                 isGenerating={justification.isGenerating}
                 isUpdating={justification.isUpdating}
                 isSavingDraft={justification.isSavingDraft}
                 onGenerate={justification.onGenerate}
-                onConfirm={justification.onConfirm}
+                onConfirm={async (text, decision, details) => {
+                  // Manual entry: save the typed fields first so the decision
+                  // is never confirmed without them.
+                  if (manual && !(await applyReplacements())) return;
+                  await justification.onConfirm(text, decision, details);
+                }}
                 onSaveDraft={justification.onSaveDraft}
+                manual={manual}
+                // The EG tab already shows Q12c–Q12g; don't duplicate them.
+                hideDecisionDetails
               />
             </div>
           )}

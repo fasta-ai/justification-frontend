@@ -19,17 +19,19 @@
 import type { ReplacementSection } from "@/lib/types";
 
 /**
- * Metadata keys whose target on the live case is a *different section
- * and/or fieldName*. Copy dialog uses this both for reading the target
- * "current value" column and for translating replacements before POSTing
- * to backend — backend writes blindly to `<section>Data[fieldName]`.
+ * Metadata keys that the live case's EG form stores under a *different
+ * fieldName*. Copy dialog uses this both for reading the target "current
+ * value" column and for translating replacements before POSTing to backend —
+ * backend writes blindly to `<section>Data[fieldName]`.
+ *
+ * Cases created from the Record Admin register carry `App_Type` and
+ * `App_PNam_Mod`; imported EG-form rows carry `Applicant` and `App_PName`.
+ * The first key the case actually has wins. The target always stays on the EG
+ * form — the application's PA_PName is its own field on the Application tab.
  */
-export const EG_METADATA_TO_TARGET: Record<
-  string,
-  { section: ReplacementSection; fieldName: string }
-> = {
-  Applicant: { section: "eg", fieldName: "App_Type" },
-  App_PName: { section: "application", fieldName: "PA_PName" },
+export const EG_TARGET_CANDIDATES: Record<string, string[]> = {
+  Applicant: ["App_Type", "Applicant"],
+  App_PName: ["App_PName", "App_PNam_Mod"],
 };
 
 /**
@@ -93,9 +95,15 @@ export function resolveSourceValue(
 export function resolveTargetSlot(
   section: ReplacementSection,
   fieldName: string,
+  egData?: Record<string, any> | null,
 ): { section: ReplacementSection; fieldName: string } {
-  if (section === "eg" && EG_METADATA_TO_TARGET[fieldName]) {
-    return EG_METADATA_TO_TARGET[fieldName];
+  const candidates = section === "eg" ? EG_TARGET_CANDIDATES[fieldName] : undefined;
+  if (candidates) {
+    const present = candidates.find((key) => {
+      const v = egData?.[key];
+      return v !== undefined && v !== null && String(v).trim() !== "";
+    });
+    return { section: "eg", fieldName: present ?? candidates[0] };
   }
   return { section, fieldName };
 }

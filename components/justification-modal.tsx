@@ -162,6 +162,8 @@ interface JustificationModalProps {
  * `onClose` is invoked by the Cancel button.
  */
 export interface JustificationPanelProps {
+  /** Hide the EG decision fields — the host (copy dialog) already shows them. */
+  hideDecisionDetails?: boolean;
   open: boolean;
   onClose: () => void;
   selectedCase: Case | null;
@@ -297,6 +299,7 @@ export function JustificationPanel({
   onConfirm,
   onSaveDraft,
   manual = false,
+  hideDecisionDetails = false,
 }: JustificationPanelProps) {
   const [decision, setDecision] = useState<"approved" | "rejected">(
     initialDecision,
@@ -667,6 +670,7 @@ export function JustificationPanel({
           </div>
 
           {/* EG decision fields — saved to the EG form on confirm / save. */}
+          {!hideDecisionDetails && (
           <div className="space-y-2">
             <p className="text-sm font-medium">EG decision details</p>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
@@ -715,6 +719,7 @@ export function JustificationPanel({
               </div>
             </div>
           </div>
+          )}
 
           {!manual && (
           <div className="flex items-center gap-2">

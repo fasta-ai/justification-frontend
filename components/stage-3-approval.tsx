@@ -606,19 +606,26 @@ export function Stage3Approval({ onBack, onComplete }: Stage3ApprovalProps) {
   >("approved");
   const [justificationModalSeed, setJustificationModalSeed] =
     useState<SimilarJustification | null>(null);
-  // Manual decision: reviewer enters details + justification, no AI / search.
-  const [justificationModalManual, setJustificationModalManual] =
-    useState(false);
+  // Manual decision: the copy dialog with no similar case — the reviewer types
+  // every field and the justification. null = a normal copy from a similar case.
+  const [manualDecision, setManualDecision] = useState<
+    "approved" | "rejected" | null
+  >(null);
+
+  const openManualDialog = useCallback((decision: "approved" | "rejected") => {
+    setReplaceSimilarCase(null);
+    setManualDecision(decision);
+    setPendingDecision(decision);
+    setIsReplaceDialogOpen(true);
+  }, []);
 
   const openJustificationModal = useCallback(
     (
       decision: "approved" | "rejected",
       seed: SimilarJustification | null = null,
-      manual = false,
     ) => {
       setJustificationModalDecision(decision);
       setJustificationModalSeed(seed);
-      setJustificationModalManual(manual);
       setPendingDecision(decision);
       setIsJustificationModalOpen(true);
     },
@@ -700,11 +707,14 @@ export function Stage3Approval({ onBack, onComplete }: Stage3ApprovalProps) {
 
   const handleOpenReplaceDialog = (caseItem: SimilarJustification) => {
     setReplaceSimilarCase(caseItem);
+    setManualDecision(null);
     setIsReplaceDialogOpen(true);
   };
 
   const handleReplaceSuccess = async () => {
-    toast.success("Case updated from similar case");
+    toast.success(
+      manualDecision ? "Case details saved" : "Case updated from similar case",
+    );
     await refetchCases();
   };
 
@@ -2785,7 +2795,7 @@ export function Stage3Approval({ onBack, onComplete }: Stage3ApprovalProps) {
                     Choose an action to proceed.
                   </p>
 
-                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                     <Button
                       type="button"
                       variant="outline"
@@ -2804,59 +2814,20 @@ export function Stage3Approval({ onBack, onComplete }: Stage3ApprovalProps) {
                     </Button>
                     <Button
                       type="button"
-                      onClick={() => openJustificationModal("approved")}
-                      disabled={isUpdatingCase || isGeneratingJustification}
-                      className="gap-2 bg-success hover:bg-success/90 text-success-foreground"
-                    >
-                      <CheckCircle2 className="w-4 h-4" />
-                      Approve
-                    </Button>
-                    <Button
-                      type="button"
-                      variant="destructive"
-                      onClick={() => openJustificationModal("rejected")}
+                      onClick={() => openManualDialog("approved")}
                       disabled={isUpdatingCase || isGeneratingJustification}
                       className="gap-2"
                     >
-                      <XCircle className="w-4 h-4" />
-                      Reject
-                    </Button>
-                  </div>
-
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                    <Button
-                      type="button"
-                      variant="outline"
-                      onClick={() =>
-                        openJustificationModal("approved", null, true)
-                      }
-                      disabled={isUpdatingCase || isGeneratingJustification}
-                      className="gap-2 border-success/50 text-success hover:bg-success hover:text-success-foreground"
-                    >
                       <Edit className="w-4 h-4" />
-                      Manual Approve
-                    </Button>
-                    <Button
-                      type="button"
-                      variant="outline"
-                      onClick={() =>
-                        openJustificationModal("rejected", null, true)
-                      }
-                      disabled={isUpdatingCase || isGeneratingJustification}
-                      className="gap-2 border-destructive/50 text-destructive hover:bg-destructive hover:text-destructive-foreground"
-                    >
-                      <Edit className="w-4 h-4" />
-                      Manual Reject
+                      Manual
                     </Button>
                   </div>
 
                   <p className="text-xs text-muted-foreground">
-                    Approve or Reject opens the justification workspace where
-                    you can review inputs, generate with AI, edit, and confirm.
-                    Manual Approve / Reject skips similar cases and AI: enter
-                    the details and justification yourself. Similar Cases loads
-                    matching records with Copy and Justification actions on
-                    each row.
+                    Similar Cases loads matching records with Copy and
+                    Justification (AI) actions on each row. Manual lets you
+                    enter the case details and justification yourself, then
+                    approve or reject.
                   </p>
                 </div>
               ) : (
@@ -3292,6 +3263,8 @@ export function Stage3Approval({ onBack, onComplete }: Stage3ApprovalProps) {
         }
         similarCase={replaceSimilarCase}
         onSuccess={handleReplaceSuccess}
+        manual={manualDecision !== null}
+        initialDecision={manualDecision ?? undefined}
         justification={{
           isGenerating: isGeneratingJustification,
           isUpdating: isUpdatingCase,
@@ -3323,7 +3296,6 @@ export function Stage3Approval({ onBack, onComplete }: Stage3ApprovalProps) {
         onGenerate={generateJustificationWithInputs}
         onConfirm={handleConfirmDecision}
         onSaveDraft={handleSaveJustificationDraft}
-        manual={justificationModalManual}
       />
 
       {/* Audit Log Dialog */}
