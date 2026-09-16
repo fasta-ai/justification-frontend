@@ -253,7 +253,6 @@ const getSimilarJustifications = async (
 
 interface Stage3ApprovalProps {
   onBack: () => void;
-  onComplete: () => void;
 }
 
 interface EditingCase {
@@ -469,7 +468,7 @@ function trimSimilarMatchesForPrompt<
 
 // JustificationEditor removed — replaced by JustificationModal + action panel.
 
-export function Stage3Approval({ onBack, onComplete }: Stage3ApprovalProps) {
+export function Stage3Approval({ onBack }: Stage3ApprovalProps) {
   const {
     products,
     selectedProducts,
@@ -660,19 +659,13 @@ export function Stage3Approval({ onBack, onComplete }: Stage3ApprovalProps) {
   }, []);
 
   // Excel export (A_EG_Form / A_PA_Form / A_Record_Admin) of decided cases.
-  // Selected cases win when any are selected; otherwise every approved or
-  // rejected case in the list goes out.
+  // Always every approved or rejected case — the export is the register
+  // hand-off, not a view of whatever happens to be selected in the table.
   const [isExportingExcel, setIsExportingExcel] = useState(false);
   const handleExportExcel = useCallback(async () => {
-    const selected = cases.filter((c) => selectedProducts.includes(c.id));
-    const pool = selected.length > 0 ? selected : cases;
-    const toExport = exportableCases(pool);
+    const toExport = exportableCases(cases);
     if (toExport.length === 0) {
-      toast.error(
-        selected.length > 0
-          ? "None of the selected cases are approved or rejected"
-          : "No approved or rejected cases to export",
-      );
+      toast.error("No approved or rejected cases to export");
       return;
     }
     setIsExportingExcel(true);
@@ -691,7 +684,7 @@ export function Stage3Approval({ onBack, onComplete }: Stage3ApprovalProps) {
     } finally {
       setIsExportingExcel(false);
     }
-  }, [cases, selectedProducts]);
+  }, [cases]);
 
   const handleCopy = (id: string, text: string) => {
     navigator.clipboard.writeText(text);
@@ -922,7 +915,6 @@ export function Stage3Approval({ onBack, onComplete }: Stage3ApprovalProps) {
     clearSimilarMatches();
   }, [selectedProducts.join(","), clearSimilarMatches]); // Re-run when selected products change
 
-  const pendingProducts = products.filter((p) => p.status === "pending_review");
 
   const selectedProductObjects = products.filter((p) =>
     selectedProducts.includes(p.id),
@@ -1943,7 +1935,7 @@ export function Stage3Approval({ onBack, onComplete }: Stage3ApprovalProps) {
             className="gap-2"
             onClick={handleExportExcel}
             disabled={isExportingExcel || approvedCount + rejectedCount === 0}
-            title="Download A_EG_Form, A_PA_Form and A_Record_Admin for approved / rejected cases (selected cases only, if any are selected)"
+            title="Download A_EG_Form, A_PA_Form and A_Record_Admin for every approved / rejected case"
           >
             {isExportingExcel ? (
               <Loader2 className="w-4 h-4 animate-spin" />
@@ -2941,15 +2933,6 @@ export function Stage3Approval({ onBack, onComplete }: Stage3ApprovalProps) {
         >
           <ChevronLeft className="w-4 h-4" />
           Back to Preview
-        </Button>
-        <Button
-          onClick={onComplete}
-          disabled={pendingProducts.length > 0}
-          size="lg"
-          className="gap-2"
-        >
-          Complete Workflow
-          <CheckCircle2 className="w-4 h-4" />
         </Button>
       </div>
 

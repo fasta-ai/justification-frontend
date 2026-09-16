@@ -47,7 +47,6 @@ import {
   resolveSourceValue,
   resolveTargetSlot,
 } from "@/lib/case-field-mapping";
-import { RECORD_ADMIN_COLUMNS } from "@/lib/eg-excel-export";
 
 interface SimilarCaseReplaceDialogProps {
   open: boolean;
@@ -110,18 +109,6 @@ const egFields = [
   "Q12f_RReject",
   "Q12g_JRem",
 ];
-
-// Record Admin register columns, also stored on egData. Identity/entry-date
-// columns (they belong to the similar case, not this one) and columns already
-// on the EG Form tab are left out.
-const RECORD_ADMIN_SKIP = new Set([
-  "SWD_Ref", "App_No", "MRef", "App_Type", "App_Cat", "DatEntry",
-]);
-const recordAdminFields = RECORD_ADMIN_COLUMNS.filter(
-  (c) => !RECORD_ADMIN_SKIP.has(c) && !egFields.includes(c),
-);
-
-type CopyTab = ReplacementSection | "recordAdmin";
 
 const appFields = [
   "PA_RefL",
@@ -221,44 +208,29 @@ export function SimilarCaseReplaceDialog({
     useCaseAuditLogs();
   const [step, setStep] = useState<1 | 2 | 3>(1);
   const [replacements, setReplacements] = useState<FieldReplacement[]>([]);
-  const [activeTab, setActiveTab] = useState<CopyTab>("eg");
+  // The right-hand panel's justification text, mirrored here so the EG Form
+  // row and the panel behave as one field.
+  const [panelDraft, setPanelDraft] = useState("");
+  // Bumped when the reviewer explicitly pushes the EG text into the panel,
+  // overriding the panel's "don't overwrite my work" guard.
+  const [egTextVersion, setEgTextVersion] = useState(0);
+  const [activeTab, setActiveTab] = useState<ReplacementSection>("eg");
 
-  // Record Admin columns live on egData, so that tab writes to the "eg"
-  // section; `tab` distinguishes it from the EG Form tab. Manual entry only:
-  // they track this case's own paperwork, and similar-case datasets don't
-  // carry them, so there is nothing meaningful to copy.
+  // Record Admin columns are deliberately absent: they track this case's own
+  // paperwork (documents received, SWD dates, weekly report status), which is
+  // not part of an EG decision and is already editable in the Edit Case
+  // dialog. Similar-case datasets don't carry them either.
   const fieldGroups: {
-    tab: CopyTab;
     section: ReplacementSection;
     label: string;
     fields: string[];
   }[] = useMemo(
     () => [
-      { tab: "eg", section: "eg", label: "EG Form", fields: egFields },
-      ...(manual
-        ? [
-            {
-              tab: "recordAdmin" as const,
-              section: "eg" as const,
-              label: "Record Admin",
-              fields: recordAdminFields,
-            },
-          ]
-        : []),
-      {
-        tab: "application",
-        section: "application",
-        label: "Application",
-        fields: appFields,
-      },
-      {
-        tab: "catalogue",
-        section: "catalogue",
-        label: "Catalogue",
-        fields: catalogueFields,
-      },
+      { section: "eg", label: "EG Form", fields: egFields },
+      { section: "application", label: "Application", fields: appFields },
+      { section: "catalogue", label: "Catalogue", fields: catalogueFields },
     ],
-    [manual],
+    [],
   );
 
   const selectedKeys = useMemo(
@@ -277,6 +249,9 @@ export function SimilarCaseReplaceDialog({
       setReplacements([]);
       setStep(1);
       setActiveTab("eg");
+      // Stale draft text would otherwise offer "Use in justification" on the
+      // next case before the panel reports its own draft.
+      setPanelDraft("");
     }
   }, [open]);
 
@@ -289,6 +264,18 @@ export function SimilarCaseReplaceDialog({
       (r) => r.section === section && r.fieldName === fieldName,
     )?.value;
   }
+
+  /**
+   * The EG form's justification as it currently stands — a pending copy or
+   * edit if there is one, otherwise the case's stored value. This is what the
+   * right-hand panel mirrors.
+   */
+  const egJustificationValue: string | undefined = originalCase
+    ? toEditString(
+        getCopiedValue("eg", "Q12b_Jus") ??
+          getOriginalValue("eg", "Q12b_Jus", originalCase),
+      )
+    : undefined;
 
   function handleUseValue(
     section: ReplacementSection,
@@ -358,6 +345,41 @@ export function SimilarCaseReplaceDialog({
       prev.filter(
         (r) => !(r.section === section && r.fieldName === fieldName),
       ),
+    );
+  }
+
+  /**
+   * The panel's draft changed (typed or generated) — mirror it into the EG
+   * Form row so both sides show one value. Text matching the case's stored
+   * value clears the pending edit rather than recording a no-op change.
+   */
+  function handlePanelDraftChange(text: string) {
+    setPanelDraft(text);
+    if (!originalCase) return;
+    const stored = getOriginalValue("eg", "Q12b_Jus", originalCase);
+    if (formatValue(text) === formatValue(stored)) {
+      handleRestore("eg", "Q12b_Jus");
+    } else {
+      handleUseValue("eg", "Q12b_Jus", text);
+    }
+  }
+
+  /**
+   * Whether to offer "Use in justification" on the EG justification row: the
+   * panel already holds different text, so adopting it must be a deliberate
+   * click rather than a silent overwrite.
+   */
+  function canPushEgText(
+    section: ReplacementSection,
+    fieldName: string,
+    shown: any,
+  ): boolean {
+    return (
+      !!justification &&
+      section === "eg" &&
+      fieldName === "Q12b_Jus" &&
+      panelDraft.trim().length > 0 &&
+      formatValue(panelDraft) !== formatValue(shown)
     );
   }
 
@@ -549,6 +571,21 @@ export function SimilarCaseReplaceDialog({
         >
           <div className="flex items-center justify-between">
             <span className="text-xs text-muted-foreground">{fieldName}</span>
+            {canPushEgText(section, fieldName, displayValue) && (
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-6 px-2 text-xs text-primary hover:text-primary hover:bg-primary/10 -my-1"
+                onClick={() => {
+                  // Keep the local mirror in step: the panel's adoption is
+                  // deliberately silent, so it won't report this back.
+                  setPanelDraft(toEditString(displayValue));
+                  setEgTextVersion((v) => v + 1);
+                }}
+              >
+                Use in justification
+              </Button>
+            )}
             {copied && (
               <Button
                 variant="ghost"
@@ -613,6 +650,21 @@ export function SimilarCaseReplaceDialog({
         >
           <div className="flex items-center justify-between">
             <span className="text-xs text-muted-foreground">Current</span>
+            {canPushEgText(section, fieldName, displayValue) && (
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-6 px-2 text-xs text-primary hover:text-primary hover:bg-primary/10 -my-1"
+                onClick={() => {
+                  // Keep the local mirror in step: the panel's adoption is
+                  // deliberately silent, so it won't report this back.
+                  setPanelDraft(toEditString(displayValue));
+                  setEgTextVersion((v) => v + 1);
+                }}
+              >
+                Use in justification
+              </Button>
+            )}
             {copied ? (
               <Button
                 variant="ghost"
@@ -752,27 +804,22 @@ export function SimilarCaseReplaceDialog({
 
         <Tabs
           value={activeTab}
-          onValueChange={(v) => setActiveTab(v as CopyTab)}
+          onValueChange={(v) => setActiveTab(v as ReplacementSection)}
           className="flex-1 min-h-0 flex flex-col"
         >
-          <TabsList
-            className={cn(
-              "grid w-full shrink-0",
-              fieldGroups.length === 4 ? "grid-cols-4" : "grid-cols-3",
-            )}
-          >
+          <TabsList className="grid w-full grid-cols-3 shrink-0">
             {fieldGroups.map((g) => (
-              <TabsTrigger key={g.tab} value={g.tab}>
+              <TabsTrigger key={g.section} value={g.section}>
                 {g.label}
               </TabsTrigger>
             ))}
           </TabsList>
           {fieldGroups.map((group) => {
-            const { tab, section, fields } = group;
+            const { section, fields } = group;
             return (
             <TabsContent
-              key={tab}
-              value={tab}
+              key={section}
+              value={section}
               className="mt-4 flex-1 min-h-0 flex flex-col"
             >
               <div className="flex items-center justify-between mb-2 shrink-0">
@@ -860,14 +907,14 @@ export function SimilarCaseReplaceDialog({
         <ScrollArea className="max-h-[45vh] pr-2">
           <div className="space-y-5">
             {fieldGroups.map((group) => {
-              const { tab, section, label } = group;
+              const { section, label } = group;
               const sectionReplacements = replacements.filter((r) =>
                 inGroup(r, group),
               );
               if (sectionReplacements.length === 0) return null;
 
               return (
-                <div key={tab} className="space-y-2">
+                <div key={section} className="space-y-2">
                   <h4 className="text-sm font-semibold flex items-center gap-2">
                     <Badge variant="secondary" className="text-[10px] px-1.5">
                       {getSectionIcon(section)}
@@ -1203,6 +1250,12 @@ export function SimilarCaseReplaceDialog({
                 manual={manual}
                 // The EG tab already shows Q12c–Q12g; don't duplicate them.
                 hideDecisionDetails
+                // The EG Form tab owns Q12b_Jus — mirror it both ways so the
+                // two are one field, and hide the panel's duplicate input.
+                externalJustification={egJustificationValue}
+                externalJustificationVersion={egTextVersion}
+                onDraftChange={handlePanelDraftChange}
+                hideEgRemarksInput
               />
             </div>
           )}

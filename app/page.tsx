@@ -35,12 +35,6 @@ function ProductManagementPage() {
     }
   }, [currentStage, setStage]);
 
-  const handleComplete = useCallback(() => {
-    // Show completion state or reset
-    alert("Workflow completed successfully!");
-    resetStore();
-  }, [resetStore]);
-
   const handleSelectWorkflow = useCallback((mode: 'full' | 'direct') => {
     setWorkflowMode(mode);
     if (mode === 'direct') {
@@ -52,10 +46,13 @@ function ProductManagementPage() {
     }
   }, [setWorkflowMode, setStage]);
 
+  // Leaving a workflow starts the next one clean: resetStore clears the parsed
+  // products, selection, justifications and season/tranche as well as putting
+  // the stage back to 1 with no workflow mode. This is also what the header's
+  // "Reset" button calls, which until now only changed the stage.
   const handleBackToDashboard = useCallback(() => {
-    setWorkflowMode(null);
-    setStage(1);
-  }, [setWorkflowMode, setStage]);
+    resetStore();
+  }, [resetStore]);
 
   const approvedCount = products.filter((p) => p.status === "approved").length;
   const rejectedCount = products.filter((p) => p.status === "rejected").length;
@@ -106,7 +103,6 @@ function ProductManagementPage() {
               {currentStage === 3 && (
                 <Stage3Approval 
                   onBack={workflowMode === 'full' ? handleBack : handleBackToDashboard} 
-                  onComplete={handleComplete} 
                 />
               )}
             </main>

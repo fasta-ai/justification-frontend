@@ -164,6 +164,19 @@ interface JustificationModalProps {
 export interface JustificationPanelProps {
   /** Hide the EG decision fields — the host (copy dialog) already shows them. */
   hideDecisionDetails?: boolean;
+  /** The EG form's Q12b_Jus as the host currently holds it. When it changes
+   *  and the reviewer hasn't written or generated anything, the draft follows
+   *  it — the EG form and this panel are the same field. */
+  externalJustification?: string;
+  /** Bumped by the host to force adoption ("Use this text"), even once the
+   *  reviewer has edited the draft. */
+  externalJustificationVersion?: number;
+  /** Fires when the reviewer types or generates, so the host can mirror the
+   *  text back into its own EG form row. */
+  onDraftChange?: (text: string) => void;
+  /** Hide the duplicate "EG justification remarks" input — the host shows
+   *  that field itself. */
+  hideEgRemarksInput?: boolean;
   open: boolean;
   onClose: () => void;
   selectedCase: Case | null;
@@ -300,6 +313,10 @@ export function JustificationPanel({
   onSaveDraft,
   manual = false,
   hideDecisionDetails = false,
+  externalJustification,
+  externalJustificationVersion,
+  onDraftChange,
+  hideEgRemarksInput = false,
 }: JustificationPanelProps) {
   const [decision, setDecision] = useState<"approved" | "rejected">(
     initialDecision,
@@ -309,6 +326,9 @@ export function JustificationPanel({
   );
   const [draft, setDraft] = useState<string>(selectedCase?.justification || "");
   const [hasGeneratedOnce, setHasGeneratedOnce] = useState(false);
+  // True once the reviewer types or generates. Guards the EG-form mirror so
+  // their own text is never replaced without asking.
+  const [draftTouched, setDraftTouched] = useState(false);
   const [showInputs, setShowInputs] = useState(false);
   const [aiAdvice, setAiAdvice] = useState<{
     decision: string;
@@ -333,6 +353,7 @@ export function JustificationPanel({
     setInputs(nextInputs);
     setDraft(nextDraft);
     setHasGeneratedOnce(false);
+    setDraftTouched(false);
     // Manual decisions start with the details open — the reviewer fills them.
     setShowInputs(manual);
     setAiAdvice(null);
@@ -366,6 +387,7 @@ export function JustificationPanel({
     setDraft(fallbackDraft);
     setAiAdvice(null);
     setHasGeneratedOnce(false);
+    setDraftTouched(false);
 
     let cancelled = false;
     (async () => {
@@ -401,6 +423,31 @@ export function JustificationPanel({
       cancelled = true;
     };
   }, [open, selectedCase?.id, decision, seedSimilarCase?.id, selectedCase?.justification]);
+
+  // Mirror the host's EG-form justification into the draft: they are one
+  // field. Adoption is deliberately conservative — only when the reviewer has
+  // not typed or generated, so their work is never overwritten silently. The
+  // host bumps `externalJustificationVersion` for an explicit "Use this text",
+  // which adopts regardless. Never adopts on mount: a seeded panel starts
+  // blank on purpose so the reviewer generates for THAT seed.
+  const externalTextRef = useRef<string | undefined>(externalJustification);
+  const externalVersionRef = useRef<number | undefined>(
+    externalJustificationVersion,
+  );
+  useEffect(() => {
+    const previousText = externalTextRef.current;
+    const previousVersion = externalVersionRef.current;
+    externalTextRef.current = externalJustification;
+    externalVersionRef.current = externalJustificationVersion;
+    if (externalJustification === undefined) return;
+    const forced =
+      externalJustificationVersion !== undefined &&
+      externalJustificationVersion !== previousVersion;
+    const changed =
+      previousText !== undefined && previousText !== externalJustification;
+    if (!forced && !(changed && !draftTouched)) return;
+    setDraft(externalJustification);
+  }, [externalJustification, externalJustificationVersion, draftTouched]);
 
   const hasSaved = Boolean(selectedCase?.justification?.trim());
   const isBusy = isGenerating || isUpdating || isSavingDraft;
@@ -445,6 +492,8 @@ export function JustificationPanel({
       typeof result === "string" ? undefined : result?.aiReasoning;
     if (text.length > 0) {
       setDraft(text);
+      setDraftTouched(true);
+      onDraftChange?.(text);
       setHasGeneratedOnce(true);
       if (aiDecision) {
         setAiAdvice({ decision: aiDecision, reasoning: aiReasoning || "" });
@@ -490,7 +539,11 @@ export function JustificationPanel({
   const buildEgPatch = (): Record<string, string> => {
     const init = initialInputsRef.current;
     const patch: Record<string, string> = {};
-    if (inputs.Q12b_Jus !== init.Q12b_Jus) patch.Q12b_Jus = inputs.Q12b_Jus;
+    // With the host showing Q12b_Jus itself, the draft is the only source —
+    // confirm / save-draft write it, so don't also patch from the hidden input.
+    if (!hideEgRemarksInput && inputs.Q12b_Jus !== init.Q12b_Jus) {
+      patch.Q12b_Jus = inputs.Q12b_Jus;
+    }
     for (const field of EG_DECISION_FIELDS) {
       if (inputs[field] !== init[field]) patch[field] = inputs[field];
     }
@@ -649,6 +702,7 @@ export function JustificationPanel({
                     disabled={isBusy}
                   />
                 </div>
+                {!hideEgRemarksInput && (
                 <div className="space-y-1 sm:col-span-2">
                   <Label className="text-xs">
                     EG justification remarks (Q12b_Jus)
@@ -665,6 +719,7 @@ export function JustificationPanel({
                     is saved back to the EG form when you save or confirm.
                   </p>
                 </div>
+                )}
               </div>
             )}
           </div>
@@ -761,7 +816,11 @@ export function JustificationPanel({
             <Textarea
               id="justification-draft"
               value={draft}
-              onChange={(e) => setDraft(e.target.value)}
+              onChange={(e) => {
+                setDraft(e.target.value);
+                setDraftTouched(true);
+                onDraftChange?.(e.target.value);
+              }}
               placeholder="Write a justification, or click Generate with AI..."
               rows={12}
               className="text-sm min-h-[220px]"
