@@ -1193,9 +1193,10 @@ export function SimilarCaseReplaceDialog({
                 isSavingDraft={justification.isSavingDraft}
                 onGenerate={justification.onGenerate}
                 onConfirm={async (text, decision, details) => {
-                  // Manual entry: save the typed fields first so the decision
-                  // is never confirmed without them.
-                  if (manual && !(await applyReplacements())) return;
+                  // Apply the pending field edits first — copies selected on
+                  // the left were otherwise dropped when confirming from here,
+                  // and manual entry would record a decision with no details.
+                  if (!(await applyReplacements())) return;
                   await justification.onConfirm(text, decision, details);
                 }}
                 onSaveDraft={justification.onSaveDraft}

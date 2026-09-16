@@ -416,6 +416,10 @@ function trimApplicationForPrompt(
 function buildCaseContextForPrompt(
   eg: Record<string, unknown> | undefined,
   catalogue: { description?: string } | undefined,
+  /** EG-form product identity. The prompt names the product from these first,
+   *  ahead of the catalogue and PA names — the EG form is what the reviewer
+   *  works from. See justification_creation.py's <PRODUCT_NAME> rule. */
+  egProduct?: { name?: string; model?: string; brand?: string },
 ): Record<string, unknown> {
   const out: Record<string, unknown> = {};
   const pick = (k: string) => {
@@ -427,6 +431,9 @@ function buildCaseContextForPrompt(
   pick("Q12e_JCost"); // cost justification
   pick("Q12g_JRem"); // J-Remarks — sibling of Q12b_Jus
   if (catalogue?.description) out.catalogueDescription = catalogue.description;
+  if (egProduct?.name?.trim()) out.egProductName = egProduct.name.trim();
+  if (egProduct?.model?.trim()) out.egModelNo = egProduct.model.trim();
+  if (egProduct?.brand?.trim()) out.egBrand = egProduct.brand.trim();
   return out;
 }
 
@@ -1142,6 +1149,7 @@ export function Stage3Approval({ onBack, onComplete }: Stage3ApprovalProps) {
           const caseContext = buildCaseContextForPrompt(
             selectedCase.egData,
             selectedCase.catalogueData,
+            { name: egName, model: egKeys.model, brand: egKeys.brand },
           );
 
           try {
@@ -1314,6 +1322,8 @@ export function Stage3Approval({ onBack, onComplete }: Stage3ApprovalProps) {
         const caseContext = buildCaseContextForPrompt(
           selectedCase.egData,
           selectedCase.catalogueData,
+          // The reviewer's edits in the modal win over the stored EG form.
+          { name: inputs.egName, model: inputs.egModel, brand: inputs.egBrand },
         );
 
         try {
@@ -1383,34 +1393,42 @@ export function Stage3Approval({ onBack, onComplete }: Stage3ApprovalProps) {
             justification: justification.substring(0, 100) + "...",
           });
 
-          // Mirror the justification into egData.Q12b_Jus so downstream
-          // Copy / Edit views see the same text the reviewer confirmed.
-          // Fire in parallel with the status update — status endpoint owns
-          // the case.justification field; save endpoint owns egData.
+          // Send ONLY what changed. The backend merges a section per key, so
+          // resending the whole section would write back this render's stale
+          // snapshot over anything changed since (a copy just applied, an edit
+          // made in another dialog).
           const withDetails = caseId === detailsCaseId;
-          const mergedEg = {
-            ...(selectedCase.egData || {}),
+          const egPatch: Record<string, unknown> = {
             ...(withDetails ? details?.egPatch : {}),
+            // Mirror the justification into egData.Q12b_Jus so downstream
+            // Copy / Edit views see the same text the reviewer confirmed.
             Q12b_Jus: justification,
           };
-          const saveDto: SaveCaseDataDto = { egData: mergedEg };
+          const saveDto: SaveCaseDataDto = { egData: egPatch };
           if (withDetails && hasAppPatch) {
-            saveDto.applicationData = {
-              ...(selectedCase.applicationData || {}),
-              ...appPatch,
-            };
+            saveDto.applicationData = { ...appPatch };
           }
-          const [, statusResult] = await Promise.all([
-            saveCaseData(caseId, saveDto).catch((err) => {
+
+          // Sequential, not parallel: both endpoints load the case and save
+          // the whole row, so running them together lets whichever commits
+          // second overwrite the other's columns.
+          const saveResult = await saveCaseData(caseId, saveDto).catch(
+            (err) => {
               console.error(`egData write failed for ${caseId}`, err);
               return { success: false } as const;
-            }),
-            updateCaseStatus(caseId, {
-              status: decision,
-              justification: justification,
-            }),
-          ]);
-          return statusResult;
+            },
+          );
+          if (saveResult?.success === false) {
+            // Don't record the decision when its data never landed.
+            console.error(
+              `Skipping status update for ${caseId}: EG data write failed`,
+            );
+            return null;
+          }
+          return updateCaseStatus(caseId, {
+            status: decision,
+            justification: justification,
+          });
         });
 
         const results = await Promise.all(updatePromises);
@@ -1502,34 +1520,34 @@ export function Stage3Approval({ onBack, onComplete }: Stage3ApprovalProps) {
       const caseId = selectedCase.id;
       setIsSavingDraft(true);
       try {
-        // Merge current egData with the incoming patch, then force Q12b_Jus
-        // to the payload value — the modal only opens this handler AFTER the
-        // reviewer confirmed the override dialog, so we intentionally
-        // overwrite whatever was stored. egPatch still carries the other
-        // eg-form edits (name, description) so those flow through untouched.
-        const mergedEg = {
-          ...(selectedCase.egData || {}),
+        // Send ONLY what changed. The backend merges a section per key, so
+        // resending the whole section would write this render's stale snapshot
+        // back over anything changed since. Q12b_Jus is forced to the payload
+        // value — the modal only opens this handler AFTER the reviewer
+        // confirmed the override dialog.
+        const egPatch: Record<string, unknown> = {
           ...payload.egPatch,
           Q12b_Jus: payload.q12bJus,
         };
         const hasAppPatch = Object.keys(payload.applicationPatch).length > 0;
-        const saveDto: SaveCaseDataDto = { egData: mergedEg };
+        const saveDto: SaveCaseDataDto = { egData: egPatch };
         if (hasAppPatch) {
-          saveDto.applicationData = {
-            ...(selectedCase.applicationData || {}),
-            ...payload.applicationPatch,
-          };
+          saveDto.applicationData = { ...payload.applicationPatch };
         }
 
-        // Fire both writes in parallel — status is intentionally omitted so
-        // the case stays in its current lifecycle state.
-        const [saveResult, statusResult] = await Promise.all([
-          saveCaseData(caseId, saveDto),
-          updateCaseStatus(caseId, { justification: payload.justification }),
-        ]);
-
+        // Sequential, not parallel: both endpoints load the case and save the
+        // whole row, so running them together lets whichever commits second
+        // overwrite the other's columns. The status itself is intentionally
+        // omitted — only the justification text is written, so the case stays
+        // in its current lifecycle state.
+        const saveResult = await saveCaseData(caseId, saveDto);
         const saveOk = saveResult?.success !== false;
-        const statusOk = statusResult?.success !== false;
+        const statusResult = saveOk
+          ? await updateCaseStatus(caseId, {
+              justification: payload.justification,
+            })
+          : null;
+        const statusOk = saveOk && statusResult?.success !== false;
 
         if (!saveOk || !statusOk) {
           // Fallback to local update so the reviewer's work isn't lost.
@@ -1538,9 +1556,12 @@ export function Stage3Approval({ onBack, onComplete }: Stage3ApprovalProps) {
               c.id === caseId
                 ? {
                     ...c,
-                    egData: mergedEg,
+                    egData: { ...(c.egData || {}), ...egPatch },
                     ...(hasAppPatch && {
-                      applicationData: saveDto.applicationData,
+                      applicationData: {
+                        ...(c.applicationData || {}),
+                        ...payload.applicationPatch,
+                      },
                     }),
                     justification: payload.justification,
                   }

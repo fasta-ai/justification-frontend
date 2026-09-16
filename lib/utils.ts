@@ -12,6 +12,7 @@ import { twMerge } from "tailwind-merge";
  *   NEXT_PUBLIC_BACKEND_HOST=localhost:3000 pnpm dev
  */
 const PRODUCTION_BACKEND_HOST = "35.240.222.126"; // new google server
+// const PRODUCTION_BACKEND_HOST = "localhost";
 const BACKEND_HOST =
   process.env.NEXT_PUBLIC_BACKEND_HOST || PRODUCTION_BACKEND_HOST;
 
@@ -31,8 +32,7 @@ export const CLOUDFRONT_URL =
   "https://costume-equally-tired-connected.trycloudflare.com";
 
 /** True when this build is pointed at production. Shown in the import UI. */
-export const IS_PRODUCTION_BACKEND =
-  BACKEND_HOST === PRODUCTION_BACKEND_HOST;
+export const IS_PRODUCTION_BACKEND = BACKEND_HOST === PRODUCTION_BACKEND_HOST;
 
 export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
