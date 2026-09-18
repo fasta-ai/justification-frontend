@@ -49,6 +49,43 @@ export const Q12F_RREJECT_OPTIONS: readonly EgOption[] = [
 ].map((v) => ({ value: v, label: v }));
 
 /**
+ * Short direction and worked-example count for each Q12f_RReject reason, from
+ * ZRReject_prompt.xlsx. Display only — it drives the hint beside the "Context
+ * for AI" box so the reviewer can see what will steer the generation before
+ * they run it. The example texts themselves never reach the browser: they live
+ * in the Python service (`python-service/extractors/reject_reasons.py`), which
+ * is their source of truth. Keep these keys in step with that module.
+ */
+export const Q12F_REASON_HINTS: Readonly<
+  Record<string, { direction: string; examples: number }>
+> = {
+  "1": { direction: "Not innovative", examples: 6 },
+  "2": { direction: "Lacking system integrity", examples: 3 },
+  "3": { direction: "Safety concern", examples: 3 },
+  "4": { direction: "Insufficient of proof", examples: 6 },
+  "5": { direction: "Beyond scope", examples: 3 },
+  "6": { direction: "Not connected to system", examples: 5 },
+  "7": { direction: "Standalone item", examples: 4 },
+  "8": { direction: "Excessive collection of personal data", examples: 1 },
+};
+
+/**
+ * Resolve a Q12f_RReject value to its hint. Matches on the leading digit, the
+ * same way the Python catalogue does, so a reworded option label on either
+ * side cannot silently break the lookup. Returns null for "Others", "NA",
+ * blanks and anything unlisted — the generator then falls back to its default
+ * rejected shape.
+ */
+export function rejectReasonHint(
+  value: string | undefined | null,
+): { key: string; direction: string; examples: number } | null {
+  if (!value) return null;
+  const key = normalizeNaLike(value).trim().split(" ")[0].replace(/[.-]+$/, "");
+  const hint = Q12F_REASON_HINTS[key];
+  return hint ? { key, ...hint } : null;
+}
+
+/**
  * Legacy stringy-nulls (e.g. Python `float('nan')` serialised as "nan") show
  * up in dataset metadata for some old rows. Normalise them to "NA" for
  * display and editing so users see a real option rather than a broken value.

@@ -277,6 +277,48 @@ export function SimilarCaseReplaceDialog({
       )
     : undefined;
 
+  /**
+   * Q12f_RReject as it currently stands, mirrored the same way. The EG tab
+   * owns this picker, so without this the panel would generate against
+   * whatever reason the case carried when it opened — not the one the
+   * reviewer just chose.
+   */
+  const egRejectReasonValue: string | undefined = originalCase
+    ? toEditString(
+        getCopiedValue("eg", "Q12f_RReject") ??
+          getOriginalValue("eg", "Q12f_RReject", originalCase),
+      )
+    : undefined;
+
+  /**
+   * Whether the case carries no data at all for a section. Cases are created
+   * from whatever Stage 1 extracted, and stage-2-preview only requires the
+   * reviewer to tick "confirmed" — so a case created without an application
+   * form uploaded is saved with `applicationData: {}` and every PA_* row here
+   * renders blank. That is worth saying out loud: the blank fields look like a
+   * loading bug, and they also mean the AI has no PA_Cat / PA_Elaborate to
+   * reason from.
+   */
+  function sectionIsEmpty(section: ReplacementSection): boolean {
+    if (!originalCase) return false;
+    const blob =
+      section === "eg"
+        ? originalCase.egData
+        : section === "application"
+          ? originalCase.applicationData
+          : originalCase.catalogueData;
+    if (!blob || typeof blob !== "object") return true;
+    return !Object.values(blob).some(
+      (v) => v !== null && v !== undefined && String(v).trim() !== "",
+    );
+  }
+
+  const sectionLabels: Record<ReplacementSection, string> = {
+    eg: "EG form",
+    application: "application form",
+    catalogue: "catalogue",
+  };
+
   function handleUseValue(
     section: ReplacementSection,
     fieldName: string,
@@ -822,6 +864,16 @@ export function SimilarCaseReplaceDialog({
               value={section}
               className="mt-4 flex-1 min-h-0 flex flex-col"
             >
+              {sectionIsEmpty(section) && (
+                <div className="mb-2 shrink-0 rounded-md border border-amber-400/60 bg-amber-50 dark:bg-amber-950/20 p-2 text-[11px] leading-relaxed">
+                  This case has no {sectionLabels[section]} data stored. Cases
+                  are created from whatever Stage 1 extracted, and nothing
+                  requires this form to have been uploaded first — so these
+                  fields are blank rather than lost. Fill in what matters and it
+                  is saved with your decision; anything left blank is also
+                  missing from the AI&apos;s grounding.
+                </div>
+              )}
               <div className="flex items-center justify-between mb-2 shrink-0">
                 {manual ? (
                   <div className="text-xs font-medium text-muted-foreground px-1 flex-1">
@@ -1254,6 +1306,7 @@ export function SimilarCaseReplaceDialog({
                 // two are one field, and hide the panel's duplicate input.
                 externalJustification={egJustificationValue}
                 externalJustificationVersion={egTextVersion}
+                externalRejectReason={egRejectReasonValue}
                 onDraftChange={handlePanelDraftChange}
                 hideEgRemarksInput
               />

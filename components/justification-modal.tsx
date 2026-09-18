@@ -40,7 +40,7 @@ import { cn } from "@/lib/utils";
 import type { Case } from "@/app/api/cases/types";
 import type { SimilarJustification } from "@/lib/types";
 import { splitProductAndModel } from "@/lib/case-import/normalise";
-import { Q12fRejectSelect } from "@/components/eg-field-select";
+import { Q12fRejectSelect, rejectReasonHint } from "@/components/eg-field-select";
 
 export interface JustificationInputs {
   PA_PName: string;
@@ -131,6 +131,24 @@ export interface GenerateResult {
   aiReasoning?: string;
 }
 
+/**
+ * Per-generation reviewer inputs, sent alongside the case fields. Separate
+ * from `JustificationInputs` because these are not case data — they describe
+ * how the reviewer wants THIS generation to go, and are not saved anywhere.
+ */
+export interface GenerateExtras {
+  /** Free text from the "Context for AI" box. Highest-priority prompt input. */
+  userContext?: string;
+  /** Q12f_RReject as currently selected, so the backend can look up that
+   *  reason's worked examples. Only meaningful when the decision is
+   *  "rejected"; the backend ignores it otherwise. */
+  rejectReason?: string;
+  /** Manual decision: skip the similar-case search. The reviewer reached
+   *  Manual precisely because no similar case fits, so the round trip is
+   *  latency spent on context the prompt would mostly disregard. */
+  manual?: boolean;
+}
+
 interface JustificationModalProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -144,6 +162,7 @@ interface JustificationModalProps {
     inputs: JustificationInputs,
     decision: "approved" | "rejected",
     seedSimilar?: SimilarJustification | null,
+    extras?: GenerateExtras,
   ) => Promise<GenerateResult | string>;
   onConfirm: (
     justification: string,
@@ -177,6 +196,12 @@ export interface JustificationPanelProps {
   /** Hide the duplicate "EG justification remarks" input — the host shows
    *  that field itself. */
   hideEgRemarksInput?: boolean;
+  /** Q12f_RReject as the host currently holds it. Required whenever
+   *  `hideDecisionDetails` is set: the host then owns the rejection-reason
+   *  picker, so the panel's own `inputs.Q12f_RReject` goes stale the moment
+   *  the reviewer changes it, and generation would look up the wrong
+   *  reason's examples. */
+  externalRejectReason?: string;
   open: boolean;
   onClose: () => void;
   selectedCase: Case | null;
@@ -189,6 +214,7 @@ export interface JustificationPanelProps {
     inputs: JustificationInputs,
     decision: "approved" | "rejected",
     seedSimilar?: SimilarJustification | null,
+    extras?: GenerateExtras,
   ) => Promise<GenerateResult | string>;
   onConfirm: (
     justification: string,
@@ -317,6 +343,7 @@ export function JustificationPanel({
   externalJustificationVersion,
   onDraftChange,
   hideEgRemarksInput = false,
+  externalRejectReason,
 }: JustificationPanelProps) {
   const [decision, setDecision] = useState<"approved" | "rejected">(
     initialDecision,
@@ -330,6 +357,9 @@ export function JustificationPanel({
   // their own text is never replaced without asking.
   const [draftTouched, setDraftTouched] = useState(false);
   const [showInputs, setShowInputs] = useState(false);
+  // Free-text steer for the next generation. Deliberately not part of
+  // `inputs`: it is never saved to the case, and it resets with the panel.
+  const [userContext, setUserContext] = useState("");
   const [aiAdvice, setAiAdvice] = useState<{
     decision: string;
     reasoning: string;
@@ -354,8 +384,11 @@ export function JustificationPanel({
     setDraft(nextDraft);
     setHasGeneratedOnce(false);
     setDraftTouched(false);
-    // Manual decisions start with the details open — the reviewer fills them.
-    setShowInputs(manual);
+    // Collapsed by default, in both flows. The details are long enough to
+    // push the context box and draft below the fold, and the reviewer reaches
+    // for them only when a value needs correcting.
+    setShowInputs(false);
+    setUserContext("");
     setAiAdvice(null);
     initialInputsRef.current = nextInputs;
     initialDraftRef.current = nextDraft;
@@ -475,6 +508,20 @@ export function JustificationPanel({
     };
   }, [seedSimilarCase]);
 
+  // The rejection reason driving generation. When the host owns the picker
+  // (hideDecisionDetails), its value is authoritative — `inputs.Q12f_RReject`
+  // is only a snapshot taken when the panel mounted.
+  const effectiveRejectReason =
+    hideDecisionDetails && externalRejectReason !== undefined
+      ? externalRejectReason
+      : inputs.Q12f_RReject;
+
+  const reasonHint = useMemo(
+    () =>
+      decision === "rejected" ? rejectReasonHint(effectiveRejectReason) : null,
+    [decision, effectiveRejectReason],
+  );
+
   const updateInput = <K extends keyof JustificationInputs>(
     key: K,
     value: JustificationInputs[K],
@@ -483,7 +530,11 @@ export function JustificationPanel({
   };
 
   const runGenerate = async () => {
-    const result = await onGenerate(inputs, decision, seedSimilarCase);
+    const result = await onGenerate(inputs, decision, seedSimilarCase, {
+      userContext,
+      rejectReason: effectiveRejectReason,
+      manual,
+    });
     // Backwards-compat: onGenerate used to return a plain string. Handle both.
     const text = typeof result === "string" ? result : result?.text || "";
     const aiDecision =
@@ -582,6 +633,45 @@ export function JustificationPanel({
       applicationPatch: buildApplicationPatch(),
     });
   };
+
+  /** Rendered in one of two positions depending on the flow — see the two
+   *  call sites below. Defined once so they cannot drift apart. */
+  const decisionToggle = (
+    <div className="space-y-2">
+      <p className="text-sm font-medium">Your decision</p>
+      <div className="grid grid-cols-2 gap-2">
+        <Button
+          type="button"
+          variant={decision === "rejected" ? "destructive" : "outline"}
+          onClick={() => setDecision("rejected")}
+          disabled={isBusy}
+          className={cn(
+            "gap-2",
+            decision !== "rejected" &&
+              "border-destructive/50 text-destructive hover:bg-destructive hover:text-destructive-foreground",
+          )}
+        >
+          <XCircle className="w-4 h-4" />
+          Reject
+        </Button>
+        <Button
+          type="button"
+          variant={decision === "approved" ? "default" : "outline"}
+          onClick={() => setDecision("approved")}
+          disabled={isBusy}
+          className={cn(
+            "gap-2",
+            decision === "approved"
+              ? "bg-success hover:bg-success/90 text-success-foreground"
+              : "border-success/50 text-success hover:bg-success hover:text-success-foreground",
+          )}
+        >
+          <CheckCircle2 className="w-4 h-4" />
+          Approve
+        </Button>
+      </div>
+    </div>
+  );
 
   return (
     <>
@@ -776,8 +866,59 @@ export function JustificationPanel({
           </div>
           )}
 
-          {!manual && (
-          <div className="flex items-center gap-2">
+          {/* Manual: decide first. The decision is the reviewer's own — there
+              is no similar case to seed it — and it selects the context
+              placeholder, the rejection-reason examples and the shape the
+              generation follows, so it has to be settled before generating. */}
+          {manual && decisionToggle}
+
+          {/* The reviewer's steer for the next generation, kept directly
+              above the draft so it reads as "here's my steer → here's the
+              result". Shown in both flows: a chosen similar case sets the
+              shape, but only the reviewer can supply what the case data
+              doesn't carry. */}
+          <div className="space-y-2">
+            <Label htmlFor="justification-context" className="text-sm">
+              Context for AI{" "}
+              <span className="font-normal text-muted-foreground">
+                (optional)
+              </span>
+            </Label>
+            <Textarea
+              id="justification-context"
+              value={userContext}
+              onChange={(e) => setUserContext(e.target.value)}
+              placeholder={
+                decision === "rejected"
+                  ? "e.g. certificate lists a different model number"
+                  : "e.g. integrates with the existing nurse-call system"
+              }
+              rows={3}
+              className="text-sm"
+              disabled={isBusy}
+            />
+            {decision === "rejected" ? (
+              reasonHint ? (
+                <p className="text-[11px] text-muted-foreground">
+                  Rejection reason {reasonHint.key} —{" "}
+                  <span className="font-medium">{reasonHint.direction}</span>.{" "}
+                  {reasonHint.examples} past justification
+                  {reasonHint.examples === 1 ? "" : "s"} written under this
+                  reason will steer the wording.
+                </p>
+              ) : (
+                <p className="text-[11px] text-muted-foreground">
+                  No standing rejection reason selected (Q12f_RReject), so there
+                  are no worked examples to follow — the wording will rest on
+                  the case data and anything you add here.
+                </p>
+              )
+            ) : (
+              <p className="text-[11px] text-muted-foreground">
+                Generation also draws on the catalogue description, PA_Cat and
+                the rest of the case details above.
+              </p>
+            )}
             <Button
               type="button"
               variant="outline"
@@ -798,11 +939,7 @@ export function JustificationPanel({
                   ? "Regenerate with AI"
                   : "Generate with AI"}
             </Button>
-            <p className="text-xs text-muted-foreground">
-              You can also write or edit the justification directly below.
-            </p>
           </div>
-          )}
 
           <Separator />
 
@@ -875,42 +1012,12 @@ export function JustificationPanel({
             </div>
           )}
 
-          {/* Decision toggle — placed after the AI advisory so the reviewer
-              reads the recommendation first, then picks. */}
-          <div className="space-y-2">
-            <p className="text-sm font-medium">Your decision</p>
-            <div className="grid grid-cols-2 gap-2">
-              <Button
-                type="button"
-                variant={decision === "rejected" ? "destructive" : "outline"}
-                onClick={() => setDecision("rejected")}
-                disabled={isBusy}
-                className={cn(
-                  "gap-2",
-                  decision !== "rejected" &&
-                    "border-destructive/50 text-destructive hover:bg-destructive hover:text-destructive-foreground",
-                )}
-              >
-                <XCircle className="w-4 h-4" />
-                Reject
-              </Button>
-              <Button
-                type="button"
-                variant={decision === "approved" ? "default" : "outline"}
-                onClick={() => setDecision("approved")}
-                disabled={isBusy}
-                className={cn(
-                  "gap-2",
-                  decision === "approved"
-                    ? "bg-success hover:bg-success/90 text-success-foreground"
-                    : "border-success/50 text-success hover:bg-success hover:text-success-foreground",
-                )}
-              >
-                <CheckCircle2 className="w-4 h-4" />
-                Approve
-              </Button>
-            </div>
-          </div>
+          {/* In the copy flow the toggle sits after the AI advisory, so the
+              reviewer reads the recommendation before picking. Manual has no
+              advisory to read, and the decision drives the context
+              placeholder and the rejection-reason hint, so it moves above
+              them instead. */}
+          {!manual && decisionToggle}
         </div>
 
         <DialogFooter className="pt-2 border-t gap-2">

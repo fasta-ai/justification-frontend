@@ -100,6 +100,7 @@ import {
   type JustificationInputs,
   type SaveDraftPayload,
   type GenerateResult,
+  type GenerateExtras,
   type DecisionDetails,
   getCatalogueDescription,
   getEgSearchKeys,
@@ -1222,13 +1223,17 @@ export function Stage3Approval({ onBack }: Stage3ApprovalProps) {
       inputs: JustificationInputs,
       decision: "approved" | "rejected",
       seedSimilar?: SimilarJustification | null,
+      extras?: GenerateExtras,
     ): Promise<GenerateResult> => {
       if (!selectedCase) return { text: "" };
       setIsGeneratingJustification(true);
       try {
         // Fetch similar matches using the (possibly edited) inputs so the AI
-        // context reflects what the user actually wants.
+        // context reflects what the user actually wants. Manual decisions skip
+        // it: the reviewer reached Manual because no similar case fits, so the
+        // search is latency spent on context the prompt would mostly disregard.
         let fetchedMatches: SimilarMatch[] = [];
+        if (!extras?.manual) {
         try {
           const result = await fetchSimilarMatches({
             item: {
@@ -1249,6 +1254,7 @@ export function Stage3Approval({ onBack }: Stage3ApprovalProps) {
           fetchedMatches = result.matches;
         } catch (err) {
           console.error("Failed to fetch similar matches for modal", err);
+        }
         }
 
         const similarMatches = trimSimilarMatchesForPrompt(
@@ -1330,6 +1336,10 @@ export function Stage3Approval({ onBack }: Stage3ApprovalProps) {
               current_eg_remarks: inputs.Q12b_Jus || "",
               action: decision,
               case_id: selectedCase.id,
+              user_context: extras?.userContext || "",
+              // Only meaningful on a rejection; the backend ignores it for an
+              // approval, so no need to gate it here.
+              reject_reason: extras?.rejectReason || "",
             }),
           });
           if (response.ok) {
