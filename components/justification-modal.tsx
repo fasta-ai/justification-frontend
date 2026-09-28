@@ -416,7 +416,16 @@ export function JustificationPanel({
     //     whatever the previous seed produced (since Confirm/Save-Draft writes
     //     that field) and make two seeds look identical.
     //   - no seed → use the case's stored justification (edit-in-place flow).
-    const fallbackDraft = seedSimilarCase ? "" : selectedCase.justification || "";
+    //   - host owns the field and there is no seed (the copy dialog's manual
+    //     entry) → whatever the host's Q12b_Jus row currently holds. The
+    //     reviewer may have typed there and not saved yet; the case's stored
+    //     justification is older than what is on screen.
+    const fallbackDraft =
+      !seedSimilarCase && externalJustification !== undefined
+        ? externalJustification
+        : seedSimilarCase
+          ? ""
+          : selectedCase.justification || "";
     setDraft(fallbackDraft);
     setAiAdvice(null);
     setHasGeneratedOnce(false);
@@ -463,6 +472,13 @@ export function JustificationPanel({
   // host bumps `externalJustificationVersion` for an explicit "Use this text",
   // which adopts regardless. Never adopts on mount: a seeded panel starts
   // blank on purpose so the reviewer generates for THAT seed.
+  //
+  // An EMPTY draft is the exception. `draftTouched` latches on the first
+  // keystroke or generation and is only cleared when the case, decision or
+  // seed changes — so after generating once, or after the decision toggle
+  // resets the draft, typing in the host's Q12b_Jus row was ignored and the
+  // Confirm button (gated on `draft`) stayed disabled with text visibly on
+  // screen. There is no work to protect when the draft is blank.
   const externalTextRef = useRef<string | undefined>(externalJustification);
   const externalVersionRef = useRef<number | undefined>(
     externalJustificationVersion,
@@ -478,9 +494,10 @@ export function JustificationPanel({
       externalJustificationVersion !== previousVersion;
     const changed =
       previousText !== undefined && previousText !== externalJustification;
-    if (!forced && !(changed && !draftTouched)) return;
+    const draftIsEmpty = draft.trim().length === 0;
+    if (!forced && !(changed && (!draftTouched || draftIsEmpty))) return;
     setDraft(externalJustification);
-  }, [externalJustification, externalJustificationVersion, draftTouched]);
+  }, [externalJustification, externalJustificationVersion, draftTouched, draft]);
 
   const hasSaved = Boolean(selectedCase?.justification?.trim());
   const isBusy = isGenerating || isUpdating || isSavingDraft;

@@ -1,8 +1,19 @@
 /**
- * Excel export of approved / rejected cases in the three workbook layouts the
- * team maintains (A_EG_Form, A_PA_Form, A_Record_Admin). One row per case,
- * columns in the exact order of the reference workbooks so the files can be
- * appended / imported as-is.
+ * Excel export of a tranche's cases in the three workbook layouts the team
+ * maintains (A_EG_Form, A_PA_Form, A_Record_Admin). One row per case, columns
+ * in the exact order of the reference workbooks so the files can be appended /
+ * imported as-is.
+ *
+ * Which cases reach which sheet
+ *   A_EG_Form      Approved / rejected only. The sheet IS the decision record
+ *                  (Q12/Q13), and an undecided case has no answers to report —
+ *                  it would export the derived defaults as if they were the
+ *                  expert group's. With nothing decided the sheet still ships,
+ *                  as a header row with no data.
+ *   A_PA_Form      Every case in scope. It is the application as submitted:
+ *                  complete once extraction has run, decision-independent.
+ *   A_Record_Admin Every case in scope. It is the in-flight tracking register,
+ *                  so the undecided rows are the ones it exists to show.
  *
  * Column sources
  *   A_EG_Form      EG form fields (egData) + the reviewer's Q12/Q13 answers
@@ -12,7 +23,10 @@
  *   A_Record_Admin The EG record-admin tracking columns (egData). Blank Yes/No
  *                  tracking columns take the same defaults Step 2 shows
  *                  (lib/record-admin-defaults), and the "received" flags are
- *                  cross-checked against what is actually on the case.
+ *                  cross-checked against what is actually on the case. On a
+ *                  case that is not decided yet, the "Yes" defaults with no
+ *                  evidence behind them are left blank — see
+ *                  UNEVIDENCED_YES_COLUMNS.
  *
  * Dates are written as real Excel dates (the reference workbooks store serial
  * dates), everything else verbatim.
@@ -178,6 +192,20 @@ export function buildPaFormRow(caseItem: Case): ExportRow {
   });
 }
 
+/**
+ * Tracking columns that default to "Yes" with nothing on the case to back it
+ * up. Recd_EGF / Recd_PAF / Recd_Cat are cross-checked against the case's own
+ * sections below, so their default never applies; these three have no such
+ * check. Harmless on a decided case — by the time the expert group ruled, the
+ * quotation was in and SWD had been asked — but on an in-flight case the
+ * register would be asserting steps that may not have happened.
+ */
+const UNEVIDENCED_YES_COLUMNS = [
+  "Recd_Quo",
+  "Req_I_SWD_YN",
+  "Req_RepSWD_YN",
+] as const;
+
 /** A_Record_Admin row: the EG tracking columns, flags derived from the case. */
 export function buildRecordAdminRow(caseItem: Case): ExportRow {
   const { eg: stored, app, cat } = sections(caseItem);
@@ -204,39 +232,61 @@ export function buildRecordAdminRow(caseItem: Case): ExportRow {
     Recd_Quo: pick(stored.Recd_Quo, eg.Recd_Quo),
     DatEntry: caseItem.createdAt,
   });
+  // Undecided rows only reached this register once it started covering the
+  // whole tranche. A blank cell reads as "not yet"; the default would read as
+  // a claim. A value the reviewer actually stored still wins.
+  if (!isDecidedCase(caseItem)) {
+    for (const col of UNEVIDENCED_YES_COLUMNS) {
+      values[col] = toExcelText(stored[col]);
+    }
+  }
   return finish(RECORD_ADMIN_COLUMNS, values);
 }
 
 export const EXPORTABLE_STATUSES = new Set<Case["status"]>(["approved", "rejected"]);
 
-/** Only approved / rejected cases carry a decision worth exporting. */
+/** A case the expert group has ruled on, so it has Q12/Q13 answers to report. */
+export function isDecidedCase(caseItem: Case): boolean {
+  return EXPORTABLE_STATUSES.has(caseItem.status);
+}
+
+/** Only approved / rejected cases carry a decision worth putting in A_EG_Form. */
 export function exportableCases(cases: Case[]): Case[] {
-  return cases.filter((c) => EXPORTABLE_STATUSES.has(c.status));
+  return cases.filter(isDecidedCase);
 }
 
 export interface ExcelExportResult {
   fileName: string;
+  /** Rows in A_PA_Form / A_Record_Admin — every case in scope. */
   caseCount: number;
+  /** Rows in A_EG_Form — the approved / rejected subset. */
+  decidedCount: number;
 }
 
 /**
  * Build the three workbooks for the given cases and download them as one zip
  * (browsers throttle or block three simultaneous downloads).
+ *
+ * Pass the whole scope (the selected tranche); this splits it per sheet. The
+ * registers take every case, A_EG_Form only the decided ones.
  */
 export async function exportCasesToExcel(cases: Case[]): Promise<ExcelExportResult> {
-  const rows = exportableCases(cases);
-  if (rows.length === 0) {
-    throw new Error("No approved or rejected cases to export");
+  if (cases.length === 0) {
+    throw new Error("No cases to export");
   }
+  const decided = exportableCases(cases);
   const [{ utils, write }, { default: PizZip }] = await Promise.all([
     import("xlsx"),
     import("pizzip"),
   ]);
 
+  // With an empty row list json_to_sheet still writes the header row, which is
+  // what an all-pending tranche should hand over for A_EG_Form.
   const workbook = (
     sheetName: string,
     columns: readonly string[],
     build: (c: Case) => ExportRow,
+    rows: Case[],
   ) => {
     const wb = utils.book_new();
     const ws = utils.json_to_sheet(rows.map(build), {
@@ -248,11 +298,17 @@ export async function exportCasesToExcel(cases: Case[]): Promise<ExcelExportResu
   };
 
   const zip = new PizZip();
-  zip.file("A_EG_Form.xlsx", workbook("A_EG_Form", EG_FORM_COLUMNS, buildEgFormRow));
-  zip.file("A_PA_Form.xlsx", workbook("A_PA_Form", PA_FORM_COLUMNS, buildPaFormRow));
+  zip.file(
+    "A_EG_Form.xlsx",
+    workbook("A_EG_Form", EG_FORM_COLUMNS, buildEgFormRow, decided),
+  );
+  zip.file(
+    "A_PA_Form.xlsx",
+    workbook("A_PA_Form", PA_FORM_COLUMNS, buildPaFormRow, cases),
+  );
   zip.file(
     "A_Record_Admin.xlsx",
-    workbook("A_Record_Admin", RECORD_ADMIN_COLUMNS, buildRecordAdminRow),
+    workbook("A_Record_Admin", RECORD_ADMIN_COLUMNS, buildRecordAdminRow, cases),
   );
 
   const stamp = new Date().toISOString().slice(0, 10);
@@ -269,5 +325,5 @@ export async function exportCasesToExcel(cases: Case[]): Promise<ExcelExportResu
   } finally {
     setTimeout(() => URL.revokeObjectURL(url), 1000);
   }
-  return { fileName, caseCount: rows.length };
+  return { fileName, caseCount: cases.length, decidedCount: decided.length };
 }

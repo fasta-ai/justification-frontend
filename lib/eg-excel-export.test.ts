@@ -156,6 +156,43 @@ describe("buildRecordAdminRow", () => {
   });
 });
 
+describe("buildRecordAdminRow on a case that is not decided", () => {
+  const pending: Case = { ...approved, status: "pending" };
+  const row = buildRecordAdminRow(pending);
+
+  it("leaves the unevidenced Yes defaults blank", () => {
+    expect(row.Recd_Quo).toBe("");
+    expect(row.Req_I_SWD_YN).toBe("");
+    expect(row.Req_RepSWD_YN).toBe("");
+  });
+
+  it("keeps the flags that are checked against the case", () => {
+    expect(row.Recd_EGF).toBe("Yes");
+    expect(row.Recd_PAF).toBe("Yes");
+    expect(row.Recd_Cat).toBe("Yes");
+  });
+
+  it("keeps the No defaults, which are true of an in-flight case", () => {
+    expect(row.Ret_Rept).toBe("No");
+    expect(row.EGF_Ready_YN).toBe("No");
+    expect(row.EGF_To_SWD_YN).toBe("No");
+  });
+
+  it("still prefers a value the reviewer stored, including the / marker", () => {
+    const stored = buildRecordAdminRow({
+      ...pending,
+      egData: { ...approved.egData, Recd_Quo: "No", Req_I_SWD_YN: "/" },
+    });
+    expect(stored.Recd_Quo).toBe("No");
+    expect(stored.Req_I_SWD_YN).toBe("/");
+  });
+
+  it("does not touch the decided rows", () => {
+    expect(buildRecordAdminRow(approved).Recd_Quo).toBe("Yes");
+    expect(buildRecordAdminRow({ ...approved, status: "rejected" }).Recd_Quo).toBe("Yes");
+  });
+});
+
 describe("exportableCases", () => {
   it("keeps only approved and rejected", () => {
     const list = [

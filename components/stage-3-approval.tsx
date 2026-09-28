@@ -80,7 +80,7 @@ import {
 } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
 import { deriveEgDefaults, downloadEgForm } from "@/lib/eg-form";
-import { exportCasesToExcel, exportableCases } from "@/lib/eg-excel-export";
+import { exportCasesToExcel } from "@/lib/eg-excel-export";
 import { useProductStore } from "@/lib/store";
 import {
   useSimilarMatches,
@@ -89,7 +89,10 @@ import {
 import { useGetCases } from "@/hooks/use-get-cases";
 import { StaffSelect } from "@/components/staff-select";
 import { Q12aSelect, Q12fRejectSelect } from "@/components/eg-field-select";
-import { useUpdateCaseStatus } from "@/hooks/use-update-case-status";
+import {
+  useUpdateCaseStatus,
+  type UpdateCaseStatusFailure,
+} from "@/hooks/use-update-case-status";
 import { useSaveCaseData } from "@/hooks/use-save-case-data";
 import { useDeleteCase } from "@/hooks/use-delete-case";
 import { useAuth } from "@/lib/auth-context";
@@ -113,6 +116,12 @@ import type {
   SimilarCaseAnalysis,
 } from "@/lib/types";
 import type { Case, SaveCaseDataDto } from "@/app/api/cases/types";
+
+/**
+ * A search query that is a case reference rather than free text: three or more
+ * digits, optionally followed by the tranche letter ("1032", "1032P", "2196p").
+ */
+const CASE_REF_QUERY = /^\d{3,}[a-z]?$/i;
 
 // Mock AI justification generation
 const generateJustification = async (
@@ -659,21 +668,34 @@ export function Stage3Approval({ onBack }: Stage3ApprovalProps) {
     }
   }, []);
 
-  // Excel export (A_EG_Form / A_PA_Form / A_Record_Admin) of decided cases.
-  // Always every approved or rejected case — the export is the register
-  // hand-off, not a view of whatever happens to be selected in the table.
+  // Excel export (A_EG_Form / A_PA_Form / A_Record_Admin).
+  //
+  // Scope is the selected tranche and nothing else: the export is the register
+  // hand-off, so it must not depend on the search box, the status filter or
+  // what happens to be selected in the table. A_PA_Form and A_Record_Admin get
+  // every case in the tranche (the second is a tracker — pending cases are the
+  // point); A_EG_Form gets only the decided ones. exportCasesToExcel splits it.
+  const trancheCases = useMemo(
+    () =>
+      trancheFilter === "all"
+        ? cases
+        : cases.filter((c) => String(c.egData?.Tranche) === trancheFilter),
+    [cases, trancheFilter],
+  );
+
   const [isExportingExcel, setIsExportingExcel] = useState(false);
   const handleExportExcel = useCallback(async () => {
-    const toExport = exportableCases(cases);
-    if (toExport.length === 0) {
-      toast.error("No approved or rejected cases to export");
+    if (trancheCases.length === 0) {
+      toast.error("No cases to export");
       return;
     }
     setIsExportingExcel(true);
     try {
-      const { fileName, caseCount } = await exportCasesToExcel(toExport);
+      const { fileName, caseCount, decidedCount } =
+        await exportCasesToExcel(trancheCases);
       toast.success(
-        `Exported ${caseCount} case${caseCount === 1 ? "" : "s"} to ${fileName}`,
+        `Exported ${caseCount} case${caseCount === 1 ? "" : "s"} to ${fileName}` +
+          ` — ${decidedCount} decided in A_EG_Form`,
       );
     } catch (error) {
       console.error("Error exporting Excel sheets:", error);
@@ -685,7 +707,7 @@ export function Stage3Approval({ onBack }: Stage3ApprovalProps) {
     } finally {
       setIsExportingExcel(false);
     }
-  }, [cases]);
+  }, [trancheCases]);
 
   const handleCopy = (id: string, text: string) => {
     navigator.clipboard.writeText(text);
@@ -1435,11 +1457,30 @@ export function Stage3Approval({ onBack }: Stage3ApprovalProps) {
 
         const results = await Promise.all(updatePromises);
 
-        // Check for failures
+        // Two kinds of failure, and they must not be treated alike. The server
+        // answering "no" (a status transition it does not allow, a validation
+        // error) is not a connectivity problem: showing the new status anyway
+        // tells the reviewer a decision was recorded when the database still
+        // holds the old one, and the lie only surfaces on the next refetch.
         const failedUpdates = results.filter((r) => !r || !r.success);
+        const rejectedByServer = results.filter(
+          (r): r is UpdateCaseStatusFailure =>
+            !!r && r.success === false && (r as UpdateCaseStatusFailure).serverRejected,
+        );
 
-        if (failedUpdates.length > 0) {
-          // Fallback: Update local state if API failed
+        if (rejectedByServer.length > 0) {
+          const reasons = Array.from(new Set(rejectedByServer.map((r) => r.error)));
+          toast.error(
+            `Server refused ${rejectedByServer.length} case(s): ${reasons.join("; ")}`,
+            { duration: 10000 },
+          );
+          // Re-sync so the table shows what was actually stored: the
+          // justification landed (it is written before the status), the
+          // status did not.
+          await refetchCases();
+        } else if (failedUpdates.length > 0) {
+          // Could not reach the server at all — keep the reviewer's work on
+          // screen rather than discarding it.
           setCases((currentCases) =>
             currentCases.map((c) =>
               selectedProducts.includes(c.id)
@@ -1453,7 +1494,7 @@ export function Stage3Approval({ onBack }: Stage3ApprovalProps) {
           );
 
           alert(
-            `Warning: ${failedUpdates.length} case(s) failed to save to server, but updated locally.`,
+            `Warning: ${failedUpdates.length} case(s) could not be reached on the server, but were updated locally.`,
           );
         } else {
           console.log(
@@ -1598,9 +1639,15 @@ export function Stage3Approval({ onBack }: Stage3ApprovalProps) {
             caseItem.egData?.App_PNam_Mod ||
             caseItem.applicationData?.PA_PName ||
             "";
-          const searchMatch =
-            caseItem.caseNumber.toLowerCase().includes(searchLower) ||
-            productName.toLowerCase().includes(searchLower);
+          // A query that looks like a case reference ("1032", "1032P") matches
+          // case numbers only. App_PNam_Mod carries "product name / model
+          // number", so a bare number otherwise also matches any case whose
+          // MODEL contains those digits — searching 1032 returned 1088P.
+          // Anything else still searches both fields as a substring.
+          const searchMatch = CASE_REF_QUERY.test(searchQuery.trim())
+            ? caseItem.caseNumber.toLowerCase().includes(searchLower)
+            : caseItem.caseNumber.toLowerCase().includes(searchLower) ||
+              productName.toLowerCase().includes(searchLower);
 
           // Filter by status: all, pending, approved, or rejected
           let statusMatch = true;
@@ -1944,8 +1991,12 @@ export function Stage3Approval({ onBack }: Stage3ApprovalProps) {
             size="sm"
             className="gap-2"
             onClick={handleExportExcel}
-            disabled={isExportingExcel || approvedCount + rejectedCount === 0}
-            title="Download A_EG_Form, A_PA_Form and A_Record_Admin for every approved / rejected case"
+            disabled={isExportingExcel || trancheCases.length === 0}
+            title={
+              trancheFilter === "all"
+                ? "Download A_PA_Form and A_Record_Admin for every case, and A_EG_Form for the approved / rejected ones"
+                : `Download A_PA_Form and A_Record_Admin for every ${trancheFilter} case, and A_EG_Form for the approved / rejected ones`
+            }
           >
             {isExportingExcel ? (
               <Loader2 className="w-4 h-4 animate-spin" />
