@@ -1115,27 +1115,11 @@ export function Stage2Preview({ onNext, onBack }: Stage2PreviewProps) {
                       const egVal = product.applicationData?.data?.["PA_RefL"];
                       if (egVal !== undefined) return egVal;
                     }
-                    if (
-                      key === "Recd_EGF" ||
-                      key === "Recd_PAF" ||
-                      key === "Recd_Quo" ||
-                      key === "Recd_Cat" ||
-                      key === "Req_I_SWD_YN" ||
-                      key === "Req_RepSWD_YN"
-                    ) {
-                      return "Yes";
-                    }
-                    if (
-                      key === "Ret_Rept" ||
-                      key === "RecdCurrWk_YN" ||
-                      key === "EGF_Ready_YN" ||
-                      key === "EGF_To_EG_YN" ||
-                      key === "EG_Reply_YN" ||
-                      key === "EGF_To_SWD_YN" ||
-                      key === "FUF_Comp_YN"
-                    ) {
-                      return "NO";
-                    }
+                    // One source of truth for the tracking-column defaults
+                    // (this used to hard-code "Yes"/"NO" here and drift from
+                    // what was saved and exported).
+                    const trackingDefault = recordAdminDefault(key);
+                    if (trackingDefault !== undefined) return trackingDefault;
                     if (key === "DatEntry") {
                       return "";
                     }

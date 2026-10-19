@@ -29,6 +29,8 @@ import {
   Maximize2,
   ChevronDown,
   ChevronUp,
+  Copy,
+  Check,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -79,7 +81,11 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
-import { deriveEgDefaults, downloadEgForm } from "@/lib/eg-form";
+import {
+  decisionEgPatch,
+  deriveEgDefaults,
+  downloadEgForm,
+} from "@/lib/eg-form";
 import { exportCasesToExcel } from "@/lib/eg-excel-export";
 import { useProductStore } from "@/lib/store";
 import {
@@ -691,8 +697,13 @@ export function Stage3Approval({ onBack }: Stage3ApprovalProps) {
     }
     setIsExportingExcel(true);
     try {
+      // Most recently worked-on case first in the file. The table keeps its
+      // own sort; this only orders the rows written to the workbook.
+      const ts = (c: Case) =>
+        Date.parse(c.updatedAt || c.createdAt || "") || 0;
+      const ordered = [...trancheCases].sort((a, b) => ts(b) - ts(a));
       const { fileName, caseCount, decidedCount } =
-        await exportCasesToExcel(trancheCases);
+        await exportCasesToExcel(ordered);
       toast.success(
         `Exported ${caseCount} case${caseCount === 1 ? "" : "s"} to ${fileName}` +
           ` — ${decidedCount} decided in A_EG_Form`,
@@ -1364,18 +1375,34 @@ export function Stage3Approval({ onBack }: Stage3ApprovalProps) {
               reject_reason: extras?.rejectReason || "",
             }),
           });
-          if (response.ok) {
-            const result = await response.json();
-            return {
-              text: result?.data?.justification || "",
-              aiDecision: result?.data?.decision,
-              aiReasoning: result?.data?.reasoning,
-            };
+          if (!response.ok) {
+            // Surface the real reason. Previously any failure collapsed to
+            // `{ text: "" }`, which the modal rendered as nothing at all —
+            // the client's "Generate AI returns blank".
+            const errorData = await response.json().catch(() => ({}));
+            const detail =
+              errorData?.details?.error ||
+              errorData?.details?.message ||
+              errorData?.message ||
+              errorData?.error ||
+              response.statusText;
+            throw new Error(
+              `AI generation failed (${response.status})${detail ? `: ${detail}` : ""}`,
+            );
           }
+          const result = await response.json();
+          return {
+            text: result?.data?.justification || "",
+            aiDecision: result?.data?.decision,
+            aiReasoning: result?.data?.reasoning,
+          };
         } catch (error) {
           console.error("Error generating justification (modal):", error);
+          const message =
+            error instanceof Error ? error.message : "AI generation failed";
+          toast.error(message);
+          throw error instanceof Error ? error : new Error(message);
         }
-        return { text: "" };
       } finally {
         setIsGeneratingJustification(false);
       }
@@ -1423,6 +1450,14 @@ export function Stage3Approval({ onBack }: Stage3ApprovalProps) {
           // made in another dialog).
           const withDetails = caseId === detailsCaseId;
           const egPatch: Record<string, unknown> = {
+            // Fields that follow from the decision itself (Q12a Yes/No, the
+            // rejection reason, and any blank the case can fill in). Written
+            // here so the EG form matches the decision in the database —
+            // previously these were derived only when rendering the form or
+            // the Excel export, so a stored answer from an earlier decision
+            // survived and contradicted the new one.
+            ...decisionEgPatch(selectedCase, decision),
+            // A field the reviewer edited by hand wins over the derived value.
             ...(withDetails ? details?.egPatch : {}),
             // Mirror the justification into egData.Q12b_Jus so downstream
             // Copy / Edit views see the same text the reviewer confirmed.
@@ -1863,26 +1898,55 @@ export function Stage3Approval({ onBack }: Stage3ApprovalProps) {
         >
           {caseItem.justification}
         </p>
-        {isJustificationLong && (
-          <Button
-            variant="link"
-            size="sm"
-            className="h-auto p-0 mt-1 text-xs"
-            onClick={() => handleToggleJustification(caseItem.id)}
-          >
-            {showFullJustification ? (
-              <>
-                View less
-                <ChevronUp className="h-3.5 w-3.5" />
-              </>
-            ) : (
-              <>
-                View more
-                <ChevronDown className="h-3.5 w-3.5" />
-              </>
-            )}
-          </Button>
-        )}
+        {/* The clamp hides the overflow from text selection too, so a
+            drag-copy from a clamped row silently stops at line three. The
+            copy button always writes the FULL justification. */}
+        <div className="flex items-center gap-3 mt-1">
+          {isJustificationLong && (
+            <Button
+              variant="link"
+              size="sm"
+              className="h-auto p-0 text-xs"
+              onClick={() => handleToggleJustification(caseItem.id)}
+            >
+              {showFullJustification ? (
+                <>
+                  View less
+                  <ChevronUp className="h-3.5 w-3.5" />
+                </>
+              ) : (
+                <>
+                  View more
+                  <ChevronDown className="h-3.5 w-3.5" />
+                </>
+              )}
+            </Button>
+          )}
+          {(caseItem.justification || "").trim().length > 0 && (
+            <Button
+              variant="link"
+              size="sm"
+              className="h-auto p-0 text-xs text-muted-foreground hover:text-foreground"
+              onClick={(e) => {
+                e.stopPropagation();
+                handleCopy(`similar-${caseItem.id}`, caseItem.justification);
+              }}
+              title="Copy the full justification text"
+            >
+              {copiedId === `similar-${caseItem.id}` ? (
+                <>
+                  Copied
+                  <Check className="h-3.5 w-3.5" />
+                </>
+              ) : (
+                <>
+                  Copy text
+                  <Copy className="h-3.5 w-3.5" />
+                </>
+              )}
+            </Button>
+          )}
+        </div>
         <div className="flex items-center justify-between mt-2 gap-2 flex-wrap">
           <div className="flex items-center gap-1 flex-wrap">
             <Badge variant="outline" className="text-xs">

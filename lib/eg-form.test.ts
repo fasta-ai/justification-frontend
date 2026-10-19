@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { Case } from "@/app/api/cases/types";
 import {
   buildEgFormData,
+  decisionEgPatch,
   deriveEgDefaults,
   egFormFileName,
   formatSwdOfficer,
@@ -167,5 +168,62 @@ describe("deriveEgDefaults", () => {
     expect(d.Q12a).toBeUndefined();
     expect(d.Q12f_RReject).toBeUndefined();
     expect(d.Q13a).toBe("NIL");
+  });
+
+  it("derives from the decision being made, not the saved status", () => {
+    const pending = { ...baseCase, status: "pending" as const };
+    expect(deriveEgDefaults(pending, "rejected").Q12a).toBe("No");
+    expect(deriveEgDefaults(pending, "approved").Q12a).toBe("Yes");
+    expect(deriveEgDefaults(pending, "approved").Q12f_RReject).toBe("NA");
+  });
+});
+
+describe("decisionEgPatch", () => {
+  const pending = { ...baseCase, status: "pending" as const };
+
+  it("sets Q12a from the decision", () => {
+    expect(decisionEgPatch(pending, "rejected").Q12a).toBe("No");
+    expect(decisionEgPatch(pending, "approved").Q12a).toBe("Yes");
+  });
+
+  it("overwrites a Q12a left over from the opposite decision", () => {
+    const wasApproved = {
+      ...baseCase,
+      status: "approved" as const,
+      egData: { ...baseCase.egData, Q12a: "Yes" },
+    };
+    expect(decisionEgPatch(wasApproved, "rejected").Q12a).toBe("No");
+  });
+
+  it("marks the rejection reason NA on approval and clears a stale NA", () => {
+    const withNa = {
+      ...baseCase,
+      egData: { ...baseCase.egData, Q12f_RReject: "NA" },
+    };
+    expect(decisionEgPatch(withNa, "approved").Q12f_RReject).toBe("NA");
+    expect(decisionEgPatch(withNa, "rejected").Q12f_RReject).toBe("");
+  });
+
+  it("keeps a rejection reason the reviewer actually chose", () => {
+    const withReason = {
+      ...baseCase,
+      egData: { ...baseCase.egData, Q12f_RReject: "4" },
+    };
+    expect(decisionEgPatch(withReason, "rejected").Q12f_RReject).toBeUndefined();
+  });
+
+  it("fills blanks but never the justification text", () => {
+    const patch = decisionEgPatch(pending, "rejected");
+    expect(patch.Q13a).toBe("NIL");
+    expect(patch.Q13b).toBe("NIL");
+    expect(patch.Q12b_Jus).toBeUndefined();
+  });
+
+  it("leaves non-blank derivable fields alone", () => {
+    const patch = decisionEgPatch(
+      { ...baseCase, egData: { ...baseCase.egData, App_Cat: "Rental" } },
+      "approved",
+    );
+    expect(patch.App_Cat).toBeUndefined();
   });
 });

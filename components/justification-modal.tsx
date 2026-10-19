@@ -193,6 +193,10 @@ export interface JustificationPanelProps {
   /** Fires when the reviewer types or generates, so the host can mirror the
    *  text back into its own EG form row. */
   onDraftChange?: (text: string) => void;
+  /** Fires with the selected decision (and whenever it changes), so a host
+   *  showing EG fields can prefill the ones the decision determines — Q12a
+   *  above all — instead of displaying an answer from an earlier decision. */
+  onDecisionChange?: (decision: "approved" | "rejected") => void;
   /** Hide the duplicate "EG justification remarks" input — the host shows
    *  that field itself. */
   hideEgRemarksInput?: boolean;
@@ -202,6 +206,11 @@ export interface JustificationPanelProps {
    *  the reviewer changes it, and generation would look up the wrong
    *  reason's examples. */
   externalRejectReason?: string;
+  /** The host has unsaved field edits of its own (pending copies in the
+   *  dialog's left column). Enables Save Draft even when nothing in this
+   *  panel changed, so those edits are not stranded behind a disabled
+   *  button. */
+  externalDirty?: boolean;
   open: boolean;
   onClose: () => void;
   selectedCase: Case | null;
@@ -342,17 +351,27 @@ export function JustificationPanel({
   externalJustification,
   externalJustificationVersion,
   onDraftChange,
+  onDecisionChange,
   hideEgRemarksInput = false,
   externalRejectReason,
+  externalDirty = false,
 }: JustificationPanelProps) {
   const [decision, setDecision] = useState<"approved" | "rejected">(
     initialDecision,
   );
+  // Report the decision up on mount and on every change, so a host rendering
+  // the EG fields can keep Q12a and the rejection reason in step with it.
+  useEffect(() => {
+    onDecisionChange?.(decision);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [decision]);
   const [inputs, setInputs] = useState<JustificationInputs>(() =>
     extractInputs(selectedCase),
   );
   const [draft, setDraft] = useState<string>(selectedCase?.justification || "");
   const [hasGeneratedOnce, setHasGeneratedOnce] = useState(false);
+  /** Why the last Generate produced nothing, shown under the button. */
+  const [generateError, setGenerateError] = useState<string | null>(null);
   // True once the reviewer types or generates. Guards the EG-form mirror so
   // their own text is never replaced without asking.
   const [draftTouched, setDraftTouched] = useState(false);
@@ -448,7 +467,12 @@ export function JustificationPanel({
         if (cancelled || !row) return;
         const gen = row.generatedJustification as string | undefined;
         if (typeof gen === "string" && gen.trim().length > 0) {
-          setDraft(gen);
+          // Only fill an EMPTY draft. The baseline set above is the case's
+          // saved justification (or the host's live Q12b_Jus), and the
+          // reviewer may already be typing by the time this lookup returns —
+          // a cached generation must never replace either. Previously it did,
+          // so a hand-edited draft came back as the older AI text on reopen.
+          setDraft((current) => (current.trim().length === 0 ? gen : current));
           setHasGeneratedOnce(true);
           if (row.aiDecision) {
             setAiAdvice({
@@ -500,6 +524,14 @@ export function JustificationPanel({
   }, [externalJustification, externalJustificationVersion, draftTouched, draft]);
 
   const hasSaved = Boolean(selectedCase?.justification?.trim());
+  /**
+   * The decision already recorded on this case, if any. `pending` and
+   * `under_review` are not decisions — there is nothing to show for them.
+   */
+  const recordedDecision: "approved" | "rejected" | null =
+    selectedCase?.status === "approved" || selectedCase?.status === "rejected"
+      ? selectedCase.status
+      : null;
   const isBusy = isGenerating || isUpdating || isSavingDraft;
   const canConfirm =
     !!selectedCase && draft.trim().length > 0 && !isBusy;
@@ -514,7 +546,7 @@ export function JustificationPanel({
   }, [inputs, draft]);
 
   const canSaveDraft =
-    !!selectedCase && !!onSaveDraft && isDirty && !isBusy;
+    !!selectedCase && !!onSaveDraft && (isDirty || externalDirty) && !isBusy;
 
   const seedInfo = useMemo(() => {
     if (!seedSimilarCase) return null;
@@ -547,13 +579,32 @@ export function JustificationPanel({
   };
 
   const runGenerate = async () => {
-    const result = await onGenerate(inputs, decision, seedSimilarCase, {
-      userContext,
-      rejectReason: effectiveRejectReason,
-      manual,
-    });
+    setGenerateError(null);
+    let result: GenerateResult | string;
+    try {
+      result = await onGenerate(inputs, decision, seedSimilarCase, {
+        userContext,
+        rejectReason: effectiveRejectReason,
+        manual,
+      });
+    } catch (err) {
+      // The host already toasts; keep the reason next to the button too, so
+      // a failed generation never looks like "nothing happened".
+      setGenerateError(
+        err instanceof Error && err.message
+          ? err.message
+          : "Generation failed. Please try again.",
+      );
+      return;
+    }
     // Backwards-compat: onGenerate used to return a plain string. Handle both.
     const text = typeof result === "string" ? result : result?.text || "";
+    if (text.trim().length === 0) {
+      setGenerateError(
+        "The AI returned no text. Try again; if it keeps happening, the generation service log has the reason.",
+      );
+      return;
+    }
     const aiDecision =
       typeof result === "string" ? undefined : result?.aiDecision;
     const aiReasoning =
@@ -655,7 +706,24 @@ export function JustificationPanel({
    *  call sites below. Defined once so they cannot drift apart. */
   const decisionToggle = (
     <div className="space-y-2">
-      <p className="text-sm font-medium">Your decision</p>
+      <div className="flex items-center gap-2 flex-wrap">
+        <p className="text-sm font-medium">Your decision</p>
+        {/* The decision already on the case. Without it the toggle reads as a
+            blank slate, and a decided case opening on the opposite choice is
+            one click from being flipped by someone who only meant to edit the
+            justification. */}
+        {recordedDecision && (
+          <Badge
+            variant={recordedDecision === "approved" ? "default" : "destructive"}
+            className={cn(
+              recordedDecision === "approved" &&
+                "bg-success text-success-foreground",
+            )}
+          >
+            Currently {recordedDecision}
+          </Badge>
+        )}
+      </div>
       <div className="grid grid-cols-2 gap-2">
         <Button
           type="button"
@@ -687,6 +755,11 @@ export function JustificationPanel({
           Approve
         </Button>
       </div>
+      {recordedDecision && decision !== recordedDecision && (
+        <p className="text-xs text-amber-600 dark:text-amber-500">
+          Confirming changes this case from {recordedDecision} to {decision}.
+        </p>
+      )}
     </div>
   );
 
@@ -956,6 +1029,14 @@ export function JustificationPanel({
                   ? "Regenerate with AI"
                   : "Generate with AI"}
             </Button>
+            {generateError && (
+              <p
+                role="alert"
+                className="text-xs text-destructive whitespace-pre-wrap"
+              >
+                {generateError}
+              </p>
+            )}
           </div>
 
           <Separator />

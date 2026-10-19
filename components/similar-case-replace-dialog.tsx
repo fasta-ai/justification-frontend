@@ -5,7 +5,10 @@ import {
   ArrowRight,
   ArrowRightLeft,
   Check,
+  ChevronDown,
   ChevronLeft,
+  ChevronUp,
+  Copy,
   History,
   RotateCcw,
   Sparkles,
@@ -34,6 +37,7 @@ import {
   normalizeNaLike,
 } from "@/components/eg-field-select";
 import { cn } from "@/lib/utils";
+import { decisionEgPatch } from "@/lib/eg-form";
 import { useAuth } from "@/lib/auth-context";
 import { useReplaceFromSimilar } from "@/hooks/use-replace-from-similar";
 import { useCaseAuditLogs } from "@/hooks/use-case-audit-logs";
@@ -150,6 +154,84 @@ function toEditString(value: any): string {
   return String(value);
 }
 
+/** Text longer than this gets a Show more toggle instead of a hard clamp. */
+const CLAMP_CHARS = 160;
+
+/**
+ * A field value that may run to a paragraph (Q12b_Jus is typically 700+
+ * chars). A CSS line-clamp hides the overflow from text selection too, so a
+ * drag-copy from a clamped block silently stops mid-sentence — the client's
+ * "text ends after specific words". Long values get an explicit Show more
+ * toggle and a Copy button that always writes the FULL text.
+ */
+function ClampedValue({
+  value,
+  lines = 3,
+  className,
+}: {
+  value: unknown;
+  lines?: 2 | 3;
+  className?: string;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const [copied, setCopied] = useState(false);
+  const text = formatValue(value);
+  const isLong = text.length > CLAMP_CHARS || text.includes("\n");
+
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch {
+      /* clipboard unavailable (insecure context) — nothing to recover */
+    }
+  };
+
+  return (
+    <div className="min-w-0">
+      <div
+        className={cn(
+          "break-words whitespace-pre-wrap",
+          isLong && !expanded && (lines === 2 ? "line-clamp-2" : "line-clamp-3"),
+          className,
+        )}
+      >
+        {text}
+      </div>
+      {isLong && (
+        <div className="flex items-center gap-3 mt-0.5">
+          <button
+            type="button"
+            className="inline-flex items-center gap-0.5 text-[11px] text-primary hover:underline"
+            onClick={() => setExpanded((v) => !v)}
+          >
+            {expanded ? "Show less" : "Show more"}
+            {expanded ? (
+              <ChevronUp className="w-3 h-3" />
+            ) : (
+              <ChevronDown className="w-3 h-3" />
+            )}
+          </button>
+          <button
+            type="button"
+            className="inline-flex items-center gap-0.5 text-[11px] text-muted-foreground hover:text-foreground"
+            onClick={copy}
+            title="Copy the full text"
+          >
+            {copied ? "Copied" : "Copy"}
+            {copied ? (
+              <Check className="w-3 h-3" />
+            ) : (
+              <Copy className="w-3 h-3" />
+            )}
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function getSourceValue(
   section: ReplacementSection,
   fieldName: string,
@@ -263,6 +345,45 @@ export function SimilarCaseReplaceDialog({
     return replacements.find(
       (r) => r.section === section && r.fieldName === fieldName,
     )?.value;
+  }
+
+  /** The decision already recorded on this case, if it has one. */
+  const recordedDecision: "approved" | "rejected" | undefined =
+    originalCase?.status === "approved" || originalCase?.status === "rejected"
+      ? originalCase.status
+      : undefined;
+
+  // The decision currently selected in the right-hand panel, reported up so
+  // the EG rows can show what confirming will write.
+  const [panelDecision, setPanelDecision] = useState<
+    "approved" | "rejected" | undefined
+  >(undefined);
+
+  /**
+   * EG values the selected decision determines: Q12a above all, the rejection
+   * reason, and any blank the case can fill from its own data. Confirming
+   * writes exactly these (see decisionEgPatch), so showing them here keeps the
+   * form the reviewer reads identical to the form that gets saved — rather
+   * than showing a Q12a left over from an earlier decision.
+   */
+  const decisionDefaults = useMemo(
+    () =>
+      originalCase && panelDecision
+        ? decisionEgPatch(originalCase, panelDecision)
+        : {},
+    [originalCase, panelDecision],
+  );
+
+  /** The stored value, unless the decision determines this field. */
+  function getDisplayOriginal(
+    section: ReplacementSection,
+    fieldName: string,
+    caseItem: Case,
+  ): any {
+    if (section === "eg" && fieldName in decisionDefaults) {
+      return (decisionDefaults as Record<string, string>)[fieldName];
+    }
+    return getOriginalValue(section, fieldName, caseItem);
   }
 
   /**
@@ -925,7 +1046,7 @@ export function SimilarCaseReplaceDialog({
                               fieldName,
                               similarCase?.metadata ?? {},
                             ),
-                        getOriginalValue(section, fieldName, originalCase),
+                        getDisplayOriginal(section, fieldName, originalCase),
                       ),
                     )}
                 </div>
@@ -986,23 +1107,23 @@ export function SimilarCaseReplaceDialog({
                           <div className="text-xs text-muted-foreground mb-1">
                             {r.fieldName}
                           </div>
-                          <div className="text-destructive line-clamp-3 break-words">
-                            {formatValue(
-                              getOriginalValue(
-                                r.section,
-                                r.fieldName,
-                                originalCase || ({} as Case),
-                              ),
+                          <ClampedValue
+                            className="text-destructive"
+                            value={getOriginalValue(
+                              r.section,
+                              r.fieldName,
+                              originalCase || ({} as Case),
                             )}
-                          </div>
+                          />
                         </div>
                         <div className="min-w-0">
                           <div className="text-xs text-muted-foreground mb-1">
                             New value
                           </div>
-                          <div className="text-success line-clamp-3 break-words font-medium">
-                            {formatValue(r.value)}
-                          </div>
+                          <ClampedValue
+                            className="text-success font-medium"
+                            value={r.value}
+                          />
                         </div>
                       </div>
                     ))}
@@ -1097,7 +1218,7 @@ export function SimilarCaseReplaceDialog({
                 {log.changedFields.map((field, idx) => (
                   <div
                     key={idx}
-                    className="grid grid-cols-[auto_1fr_1fr] gap-2 items-center text-xs py-1 border-b last:border-0"
+                    className="grid grid-cols-[auto_1fr_1fr] gap-2 items-start text-xs py-1 border-b last:border-0"
                   >
                     <Badge variant="secondary" className="text-[10px] px-1.5">
                       {getSectionIcon(field.section)}
@@ -1106,17 +1227,13 @@ export function SimilarCaseReplaceDialog({
                       <span className="text-muted-foreground block">
                         {field.fieldName}
                       </span>
-                      <span className="text-destructive line-clamp-2 break-words">
-                        {formatValue(field.oldValue)}
-                      </span>
+                      <ClampedValue lines={2} className="text-destructive" value={field.oldValue} />
                     </div>
                     <div className="min-w-0">
                       <span className="text-muted-foreground block">
                         → new
                       </span>
-                      <span className="text-success line-clamp-2 break-words font-medium">
-                        {formatValue(field.newValue)}
-                      </span>
+                      <ClampedValue lines={2} className="text-success font-medium" value={field.newValue} />
                     </div>
                   </div>
                 ))}
@@ -1173,7 +1290,7 @@ export function SimilarCaseReplaceDialog({
               {latestLog.changedFields.map((field, idx) => (
                 <div
                   key={idx}
-                  className="grid grid-cols-[auto_1fr_1fr] gap-2 items-center text-xs py-1 border-b last:border-0"
+                  className="grid grid-cols-[auto_1fr_1fr] gap-2 items-start text-xs py-1 border-b last:border-0"
                 >
                   <Badge variant="secondary" className="text-[10px] px-1.5">
                     {getSectionIcon(field.section)}
@@ -1182,15 +1299,11 @@ export function SimilarCaseReplaceDialog({
                     <span className="text-muted-foreground block">
                       {field.fieldName}
                     </span>
-                    <span className="text-destructive line-clamp-2 break-words">
-                      {formatValue(field.oldValue)}
-                    </span>
+                    <ClampedValue lines={2} className="text-destructive" value={field.oldValue} />
                   </div>
                   <div className="min-w-0">
                     <span className="text-muted-foreground block">→ new</span>
-                    <span className="text-success line-clamp-2 break-words font-medium">
-                      {formatValue(field.newValue)}
-                    </span>
+                    <ClampedValue lines={2} className="text-success font-medium" value={field.newValue} />
                   </div>
                 </div>
               ))}
@@ -1283,7 +1396,13 @@ export function SimilarCaseReplaceDialog({
                 onClose={handleClose}
                 selectedCase={originalCase}
                 initialDecision={
+                  // Precedence: what the reviewer clicked in the table (an
+                  // expressed intent) > the decision this case already
+                  // carries, so a decided case never opens on the opposite
+                  // choice > the similar case's decision (shown separately in
+                  // the seed banner) > approve.
                   initialDecision ??
+                  recordedDecision ??
                   (similarCase?.decision === "rejected" ? "rejected" : "approved")
                 }
                 seedSimilarCase={similarCase}
@@ -1298,7 +1417,21 @@ export function SimilarCaseReplaceDialog({
                   if (!(await applyReplacements())) return;
                   await justification.onConfirm(text, decision, details);
                 }}
-                onSaveDraft={justification.onSaveDraft}
+                onSaveDraft={
+                  justification.onSaveDraft
+                    ? async (payload) => {
+                        // Same as Confirm: the left column's pending copies
+                        // and manual edits are only persisted through
+                        // applyReplacements. Saving the draft without them
+                        // silently dropped everything entered on the left.
+                        if (!(await applyReplacements())) return;
+                        await justification.onSaveDraft?.(payload);
+                      }
+                    : undefined
+                }
+                // Pending left-column edits must enable Save Draft even when
+                // the justification itself is untouched.
+                externalDirty={replacements.length > 0}
                 manual={manual}
                 // The EG tab already shows Q12c–Q12g; don't duplicate them.
                 hideDecisionDetails
@@ -1308,6 +1441,7 @@ export function SimilarCaseReplaceDialog({
                 externalJustificationVersion={egTextVersion}
                 externalRejectReason={egRejectReasonValue}
                 onDraftChange={handlePanelDraftChange}
+                onDecisionChange={setPanelDecision}
                 hideEgRemarksInput
               />
             </div>

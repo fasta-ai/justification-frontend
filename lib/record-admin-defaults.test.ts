@@ -7,7 +7,10 @@ import {
 describe("record admin defaults", () => {
   it("knows the Yes and No columns and nothing else", () => {
     expect(recordAdminDefault("Recd_EGF")).toBe("Yes");
-    expect(recordAdminDefault("Req_RepSWD_YN")).toBe("Yes");
+    // SWD request columns follow the reference register: "NA" unless a
+    // request was actually made.
+    expect(recordAdminDefault("Req_I_SWD_YN")).toBe("NA");
+    expect(recordAdminDefault("Req_RepSWD_YN")).toBe("NA");
     expect(recordAdminDefault("EGF_Ready_YN")).toBe("No");
     expect(recordAdminDefault("FUF_Comp_YN")).toBe("No");
     expect(recordAdminDefault("MRef")).toBeUndefined();

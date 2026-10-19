@@ -146,14 +146,29 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
     const refreshPromise = (async () => {
       try {
-        const response = await fetch("/api/auth/refresh", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ refreshToken }),
-        });
+        let response: Response;
+        try {
+          response = await fetch("/api/auth/refresh", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ refreshToken }),
+          });
+        } catch (networkErr) {
+          // Transient: offline, backend restarting. Keep the session; the
+          // 60 s tick (or the next 401) retries. Logging out here threw
+          // away unsaved work over a single blip.
+          console.warn("Token refresh unreachable, will retry", networkErr);
+          return currentToken;
+        }
 
+        if (response.status === 401 || response.status === 403) {
+          // The refresh token itself was rejected: the session is dead.
+          throw new Error("Refresh rejected");
+        }
         if (!response.ok) {
-          throw new Error("Refresh failed");
+          // 5xx / proxy error: transient, same as unreachable.
+          console.warn(`Token refresh failed with ${response.status}, will retry`);
+          return currentToken;
         }
 
         const data: AuthTokens = await response.json();

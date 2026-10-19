@@ -7,15 +7,22 @@
  * and the A_Record_Admin export. A value already stored on the case wins.
  */
 
-/** Documents are on hand and SWD was asked / replied: default "Yes". */
+/** Documents are on hand: default "Yes". */
 export const RECORD_ADMIN_YES_FIELDS = [
   "Recd_EGF",
   "Recd_PAF",
   "Recd_Quo",
   "Recd_Cat",
-  "Req_I_SWD_YN",
-  "Req_RepSWD_YN",
 ] as const;
+
+/**
+ * Whether SWD was asked for more information / replied. In the reference
+ * A_Record_Admin register this is "NA" for three quarters of all rows
+ * (5551 of 7479 for Req_I_SWD_YN) — no information was requested — and "Yes"
+ * only where a request actually went out. Defaulting to "Yes" asserted a
+ * request on every case.
+ */
+export const RECORD_ADMIN_NA_FIELDS = ["Req_I_SWD_YN", "Req_RepSWD_YN"] as const;
 
 /** Workflow milestones that have not happened at intake: default "No". */
 export const RECORD_ADMIN_NO_FIELDS = [
@@ -28,13 +35,16 @@ export const RECORD_ADMIN_NO_FIELDS = [
   "FUF_Comp_YN",
 ] as const;
 
-const DEFAULTS: Record<string, "Yes" | "No"> = Object.fromEntries([
+export type RecordAdminDefault = "Yes" | "No" | "NA";
+
+const DEFAULTS: Record<string, RecordAdminDefault> = Object.fromEntries([
   ...RECORD_ADMIN_YES_FIELDS.map((f) => [f, "Yes"]),
   ...RECORD_ADMIN_NO_FIELDS.map((f) => [f, "No"]),
+  ...RECORD_ADMIN_NA_FIELDS.map((f) => [f, "NA"]),
 ]);
 
 /** The default for a tracking column, or undefined for any other key. */
-export function recordAdminDefault(field: string): "Yes" | "No" | undefined {
+export function recordAdminDefault(field: string): RecordAdminDefault | undefined {
   return DEFAULTS[field];
 }
 

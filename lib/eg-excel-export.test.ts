@@ -68,6 +68,19 @@ describe("coercion", () => {
     expect(toExcelDate("/")).toBe("");
     expect(toExcelDate("")).toBe("");
   });
+  it("accepts the extractor's other date shapes", () => {
+    // Two-digit year, dashed and dotted separators, single-digit day/month.
+    expect(toExcelDate("17/8/26")).toEqual(new Date(2026, 7, 17));
+    expect(toExcelDate("17-08-2026")).toEqual(new Date(2026, 7, 17));
+    expect(toExcelDate("17.08.2026")).toEqual(new Date(2026, 7, 17));
+    // Year split by a stray space in the PDF text.
+    expect(toExcelDate("17/8/202 6")).toEqual(new Date(2026, 7, 17));
+    // Excel serial for 2026-08-17.
+    expect(toExcelDate(46251)).toEqual(new Date(Date.UTC(2026, 7, 17)));
+    // Impossible dates stay blank rather than rolling over.
+    expect(toExcelDate("31/02/2026")).toBe("");
+    expect(toExcelDate("17/13/2026")).toBe("");
+  });
   it("turns numeric strings into numbers and keeps text", () => {
     expect(toExcelNumber("600,000")).toBe(600000);
     expect(toExcelNumber(60)).toBe(60);
@@ -138,7 +151,7 @@ describe("buildRecordAdminRow", () => {
     expect(row.Recd_PAF).toBe("Yes");
     expect(row.Recd_Cat).toBe("Yes");
     expect(row.Recd_Quo).toBe("Yes");
-    expect(row.Req_I_SWD_YN).toBe("Yes");
+    expect(row.Req_I_SWD_YN).toBe("NA");
     expect(row.Ret_Rept).toBe("No");
     expect(row.EGF_To_SWD_YN).toBe("No");
     expect(row.MRef).toBe("");

@@ -77,13 +77,40 @@ const NUMBER_COLUMNS = new Set([
 
 export type ExportRow = Record<string, string | number | Date>;
 
-/** dd/mm/yyyy, yyyy-mm-dd, or ISO timestamp -> Date; anything else -> "". */
+/**
+ * dd/mm/yyyy (also dd-mm-yyyy, dd.mm.yyyy, two-digit years), yyyy-mm-dd, an
+ * ISO timestamp, or an Excel serial -> Date; anything else -> "".
+ *
+ * The EG extractor's date regex accepts `\d{2,4}` years and any of / - . as
+ * the separator, and PDF text extraction sometimes splits a year across a
+ * space ("17/8/202 6"). Only the four-digit slash form used to parse, so the
+ * rest exported as blank cells.
+ */
 export function toExcelDate(value: unknown): Date | "" {
   if (value instanceof Date) return isNaN(value.getTime()) ? "" : value;
-  const s = clean(value);
+  if (typeof value === "number" && Number.isFinite(value)) {
+    // Excel serial (days since 1899-12-30); only plausible modern dates.
+    if (value > 20000 && value < 80000) {
+      return new Date(Date.UTC(1899, 11, 30) + Math.round(value) * 86_400_000);
+    }
+    return "";
+  }
+  let s = clean(value);
   if (!s) return "";
-  const dmy = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
-  if (dmy) return new Date(+dmy[3], +dmy[2] - 1, +dmy[1]);
+  // Re-join a year split by a stray space: "17/8/202 6" -> "17/8/2026".
+  s = s.replace(/^(\d{1,2}[\/\-.]\d{1,2}[\/\-.]\d{1,3})\s+(\d{1,3})$/, "$1$2");
+  const dmy = s.match(/^(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{2}|\d{4})$/);
+  if (dmy) {
+    const day = +dmy[1];
+    const month = +dmy[2];
+    // Two-digit year: these registers only hold 2000s dates.
+    const year = dmy[3].length === 2 ? 2000 + +dmy[3] : +dmy[3];
+    if (month < 1 || month > 12 || day < 1 || day > 31) return "";
+    const d = new Date(year, month - 1, day);
+    // Reject roll-overs like 31/02 that the Date constructor would silently
+    // turn into March.
+    return d.getMonth() === month - 1 ? d : "";
+  }
   const iso = s.match(/^(\d{4})-(\d{2})-(\d{2})(?:[T ](\d{2}):(\d{2})(?::(\d{2}))?)?/);
   if (iso) {
     if (iso[4] !== undefined) {

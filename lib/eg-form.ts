@@ -100,11 +100,21 @@ function formatAmount(value: unknown): string {
  * dialog so both show the same prefilled values. Only non-empty derivations
  * are returned; keys already set on egData are left out.
  */
-export function deriveEgDefaults(caseItem: Case): Record<string, string> {
+export function deriveEgDefaults(
+  caseItem: Case,
+  /**
+   * The decision being made right now, when that is not yet the case's saved
+   * status — the reviewer has picked Approve/Reject in the dialog but has not
+   * confirmed. Without it these derive from `caseItem.status`, which on a
+   * pending case yields nothing and on a decided case yields the OLD answer.
+   */
+  pendingDecision?: "approved" | "rejected",
+): Record<string, string> {
   const eg = (caseItem.egData ?? {}) as Record<string, unknown>;
   const app = (caseItem.applicationData ?? {}) as Record<string, unknown>;
-  const isApproved = caseItem.status === "approved";
-  const isRejected = caseItem.status === "rejected";
+  const effectiveStatus = pendingDecision ?? caseItem.status;
+  const isApproved = effectiveStatus === "approved";
+  const isRejected = effectiveStatus === "rejected";
   const justification = clean(caseItem.justification);
 
   const derived: Record<string, string> = {
@@ -123,6 +133,43 @@ export function deriveEgDefaults(caseItem: Case): Record<string, string> {
     if (value && !clean(eg[key])) out[key] = value;
   }
   return out;
+}
+
+/**
+ * The egData fields to write when a decision is confirmed, so the EG form
+ * agrees with the decision instead of catching up only at download/export time
+ * (and only while the stored value happened to be blank).
+ *
+ * `Q12a` is the EG form's "recommended?" answer — it IS the decision, so it is
+ * always rewritten. A case that was approved and is now rejected must not keep
+ * `Q12a: "Yes"`. `Q12f_RReject` is a rejection reason: meaningless on an
+ * approval ("NA"), and a stale "NA" is wrong on a rejection, but a reason the
+ * reviewer actually chose is left alone. Everything else only fills a blank.
+ *
+ * `Q12b_Jus` is deliberately excluded: the caller writes the justification
+ * text it just confirmed, which is newer than anything derivable here.
+ */
+export function decisionEgPatch(
+  caseItem: Case,
+  decision: "approved" | "rejected",
+): Record<string, string> {
+  const eg = (caseItem.egData ?? {}) as Record<string, unknown>;
+  const { Q12b_Jus: _ignored, ...blanksOnly } = deriveEgDefaults(
+    caseItem,
+    decision,
+  );
+
+  const patch: Record<string, string> = { ...blanksOnly };
+  patch.Q12a = decision === "approved" ? "Yes" : "No";
+
+  const storedReason = clean(eg.Q12f_RReject);
+  if (decision === "approved") {
+    patch.Q12f_RReject = "NA";
+  } else if (!storedReason || storedReason.toUpperCase() === "NA") {
+    patch.Q12f_RReject = "";
+  }
+
+  return patch;
 }
 
 /** Map a live case onto the template tags. Values already on egData win over derived fallbacks. */
