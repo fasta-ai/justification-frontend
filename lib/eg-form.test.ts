@@ -123,6 +123,19 @@ describe("buildEgFormData", () => {
     expect(d.App_Cat).toBe("Rental");
     expect(d.Applicant).toBe("Elderly home");
   });
+
+  it("writes Procurement / Rental, never a Yes/No, into the EG form", () => {
+    const withCat = (App_Cat: string, PA_RefL = "Yes") =>
+      buildEgFormData({
+        ...baseCase,
+        egData: { ...baseCase.egData, App_Cat },
+        applicationData: { ...baseCase.applicationData, PA_RefL },
+      }).App_Cat;
+    expect(withCat(" rental ")).toBe("Rental");
+    expect(withCat("Yes")).toBe("Procurement");
+    expect(withCat("", "No")).toBe("Procurement");
+    expect(withCat("/", "Yes")).toBe("Procurement");
+  });
 });
 
 describe("egFormFileName", () => {
@@ -161,6 +174,28 @@ describe("deriveEgDefaults", () => {
     expect(d.Q13a).toBe("NIL");
     expect(d.Q12a).toBe("No");
     expect(d.Q12f_RReject).toBeUndefined();
+  });
+
+  it("keeps Rental and replaces a Yes/No App_Cat with the real category", () => {
+    expect(
+      deriveEgDefaults({
+        ...baseCase,
+        egData: { ...baseCase.egData, App_Cat: "Yes" },
+      }).App_Cat,
+    ).toBe("Procurement");
+    expect(
+      deriveEgDefaults({
+        ...baseCase,
+        egData: { ...baseCase.egData, App_Cat: "" },
+        applicationData: { ...baseCase.applicationData, App_Cat: "Rental" },
+      }).App_Cat,
+    ).toBe("Rental");
+    expect(
+      deriveEgDefaults({
+        ...baseCase,
+        egData: { ...baseCase.egData, App_Cat: "rental" },
+      }).App_Cat,
+    ).toBeUndefined();
   });
 
   it("returns nothing status-dependent for a pending case", () => {

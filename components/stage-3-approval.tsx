@@ -87,6 +87,7 @@ import {
   downloadEgForm,
 } from "@/lib/eg-form";
 import { exportCasesToExcel } from "@/lib/eg-excel-export";
+import { resolveAppCat } from "@/lib/app-cat";
 import { useProductStore } from "@/lib/store";
 import {
   useSimilarMatches,
@@ -856,6 +857,8 @@ export function Stage3Approval({ onBack }: Stage3ApprovalProps) {
           ? (egDefaults[field] ?? storedStr)
           : storedStr;
     });
+    // Procurement / Rental only, never a stray Yes/No.
+    egData.App_Cat = resolveAppCat(caseItem.egData, caseItem.applicationData);
     setEgFormData(egData);
 
     // Initialize application data
@@ -2456,6 +2459,13 @@ export function Stage3Approval({ onBack }: Stage3ApprovalProps) {
                           "—";
 
                         const getData = (key: string) => {
+                          // Procurement / Rental, same rule as the exports.
+                          if (key === "App_Cat") {
+                            return resolveAppCat(
+                              caseItem.egData,
+                              caseItem.applicationData,
+                            );
+                          }
                           const egVal = caseItem.egData?.[key];
                           if (
                             egVal !== undefined &&
