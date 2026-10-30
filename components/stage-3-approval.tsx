@@ -1459,8 +1459,10 @@ export function Stage3Approval({ onBack }: Stage3ApprovalProps) {
             ...decisionEgPatch(selectedCase, decision),
             // A field the reviewer edited by hand wins over the derived value.
             ...(withDetails ? details?.egPatch : {}),
-            // Mirror the justification into egData.Q12b_Jus so downstream
-            // Copy / Edit views see the same text the reviewer confirmed.
+            // `justification` is the OFFICER'S own 12(b) (the panel's manual
+            // field) — never the AI suggestion, which is reference only. It is
+            // the final 12(b): mirror it into egData.Q12b_Jus so the EG form,
+            // the Excel export and the similar-case corpus all record it.
             Q12b_Jus: justification,
           };
           const saveDto: SaveCaseDataDto = { egData: egPatch };
@@ -1600,9 +1602,9 @@ export function Stage3Approval({ onBack }: Stage3ApprovalProps) {
       try {
         // Send ONLY what changed. The backend merges a section per key, so
         // resending the whole section would write this render's stale snapshot
-        // back over anything changed since. Q12b_Jus is forced to the payload
-        // value — the modal only opens this handler AFTER the reviewer
-        // confirmed the override dialog.
+        // back over anything changed since. Q12b_Jus is the officer's
+        // own 12(b) from the panel's manual field; AI suggestions are never
+        // part of the payload.
         const egPatch: Record<string, unknown> = {
           ...payload.egPatch,
           Q12b_Jus: payload.q12bJus,

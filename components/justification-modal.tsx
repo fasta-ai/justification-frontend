@@ -11,6 +11,7 @@ import {
   ChevronRight,
   Save,
   AlertTriangle,
+  ClipboardCopy,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -26,16 +27,6 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from "@/components/ui/alert-dialog";
 import { cn } from "@/lib/utils";
 import type { Case } from "@/app/api/cases/types";
 import type { SimilarJustification } from "@/lib/types";
@@ -183,22 +174,24 @@ interface JustificationModalProps {
 export interface JustificationPanelProps {
   /** Hide the EG decision fields — the host (copy dialog) already shows them. */
   hideDecisionDetails?: boolean;
-  /** The EG form's Q12b_Jus as the host currently holds it. When it changes
-   *  and the reviewer hasn't written or generated anything, the draft follows
-   *  it — the EG form and this panel are the same field. */
+  /** The EG form's Q12b_Jus as the host currently holds it. The officer's
+   *  12(b) field in this panel is the same field: when the host value changes
+   *  and the officer hasn't typed here, the panel follows it. AI output never
+   *  flows through this — it lives in the separate AI suggestion panel. */
   externalJustification?: string;
   /** Bumped by the host to force adoption ("Use this text"), even once the
    *  reviewer has edited the draft. */
   externalJustificationVersion?: number;
-  /** Fires when the reviewer types or generates, so the host can mirror the
-   *  text back into its own EG form row. */
+  /** Fires when the officer's 12(b) changes (typing, or an explicit "Copy AI
+   *  text into my 12(b)"), so the host can mirror it into its EG form row.
+   *  Never fires on Generate. */
   onDraftChange?: (text: string) => void;
   /** Fires with the selected decision (and whenever it changes), so a host
    *  showing EG fields can prefill the ones the decision determines — Q12a
    *  above all — instead of displaying an answer from an earlier decision. */
   onDecisionChange?: (decision: "approved" | "rejected") => void;
-  /** Hide the duplicate "EG justification remarks" input — the host shows
-   *  that field itself. */
+  /** Kept for API compatibility. The officer's 12(b) field in this panel is
+   *  the Q12b_Jus input, so there is no separate remarks input any more. */
   hideEgRemarksInput?: boolean;
   /** Q12f_RReject as the host currently holds it. Required whenever
    *  `hideDecisionDetails` is set: the host then owns the rejection-reason
@@ -281,6 +274,32 @@ function extractInputs(c: Case | null): JustificationInputs {
   };
 }
 
+/**
+ * The officer's own 12(b) as stored on the case. The EG form's Q12b_Jus is
+ * the record; `case.justification` mirrors it on confirm and is the fallback
+ * for cases decided before that mirror existed.
+ */
+export function officerQ12bFor(c: Case | null | undefined): string {
+  if (!c) return "";
+  const eg = (c.egData || {}) as Record<string, unknown>;
+  const q12b = eg.Q12b_Jus;
+  if (typeof q12b === "string" && q12b.trim().length > 0) return q12b;
+  return c.justification || "";
+}
+
+/**
+ * Put AI reference text into the officer's 12(b). Never destructive: an
+ * empty field takes the AI text as-is, otherwise it is appended below what
+ * the officer already wrote so nothing they typed is lost.
+ */
+export function insertAiTextIntoQ12b(officerText: string, aiText: string): string {
+  const ai = aiText.trim();
+  if (!ai) return officerText;
+  if (officerText.trim().length === 0) return ai;
+  if (officerText.includes(ai)) return officerText;
+  return `${officerText.replace(/\s+$/, "")}\n\n${ai}`;
+}
+
 export function JustificationModal({
   open,
   onOpenChange,
@@ -297,7 +316,7 @@ export function JustificationModal({
 }: JustificationModalProps) {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-[720px] max-h-[90vh] overflow-hidden flex flex-col">
+      <DialogContent className="sm:max-w-[1100px] w-[95vw] max-h-[90vh] overflow-hidden flex flex-col">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <Sparkles className="w-5 h-5 text-primary" />
@@ -307,7 +326,7 @@ export function JustificationModal({
           <DialogDescription>
             {manual
               ? "Enter the case details and your own justification, then confirm. No similar-case search or AI is used."
-              : "Review the fields the AI will use, generate a draft, edit it, then save as a draft or confirm your decision."}
+              : "Write your 12(b) justification. The AI suggestion is shown separately as a reference only — it is never saved as 12(b) unless you copy it in."}
           </DialogDescription>
         </DialogHeader>
         <JustificationPanel
@@ -368,12 +387,17 @@ export function JustificationPanel({
   const [inputs, setInputs] = useState<JustificationInputs>(() =>
     extractInputs(selectedCase),
   );
-  const [draft, setDraft] = useState<string>(selectedCase?.justification || "");
+  // `draft` is the OFFICER'S 12(b) — their own manual text and the single
+  // source of truth for Q12b_Jus / case.justification on confirm and save.
+  // AI output never writes here; it goes to `aiSuggestion` (reference only)
+  // and reaches the officer's field only through "Copy AI text into my 12(b)".
+  const [draft, setDraft] = useState<string>(() => officerQ12bFor(selectedCase));
+  const [aiSuggestion, setAiSuggestion] = useState<string>("");
   const [hasGeneratedOnce, setHasGeneratedOnce] = useState(false);
   /** Why the last Generate produced nothing, shown under the button. */
   const [generateError, setGenerateError] = useState<string | null>(null);
-  // True once the reviewer types or generates. Guards the EG-form mirror so
-  // their own text is never replaced without asking.
+  // True once the officer types (or copies AI text in). Guards the EG-form
+  // mirror so their own text is never replaced without asking.
   const [draftTouched, setDraftTouched] = useState(false);
   const [showInputs, setShowInputs] = useState(false);
   // Free-text steer for the next generation. Deliberately not part of
@@ -383,11 +407,10 @@ export function JustificationPanel({
     decision: string;
     reasoning: string;
   } | null>(null);
-  const [saveConfirmOpen, setSaveConfirmOpen] = useState(false);
 
   // Snapshots for dirty tracking — captured whenever we (re)open on a case.
   const initialInputsRef = useRef<JustificationInputs>(extractInputs(selectedCase));
-  const initialDraftRef = useRef<string>(selectedCase?.justification || "");
+  const initialDraftRef = useRef<string>(officerQ12bFor(selectedCase));
   const adviceRef = useRef<HTMLDivElement | null>(null);
   // Tracks the most recent (case, seed, decision) triple we prefilled for, so
   // we don't clobber an in-progress edit when React re-runs the effect.
@@ -397,10 +420,16 @@ export function JustificationPanel({
   useEffect(() => {
     if (!open) return;
     const nextInputs = extractInputs(selectedCase);
-    const nextDraft = selectedCase?.justification || "";
+    // The officer's 12(b): the host's live EG row when it owns the field
+    // (copy dialog — may hold unsaved typing), else the case's stored 12(b).
+    const nextDraft =
+      externalJustification !== undefined
+        ? externalJustification
+        : officerQ12bFor(selectedCase);
     setDecision(initialDecision);
     setInputs(nextInputs);
     setDraft(nextDraft);
+    setAiSuggestion("");
     setHasGeneratedOnce(false);
     setDraftTouched(false);
     // Collapsed by default, in both flows. The details are long enough to
@@ -412,15 +441,15 @@ export function JustificationPanel({
     initialInputsRef.current = nextInputs;
     initialDraftRef.current = nextDraft;
     prefillKeyRef.current = "";
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, selectedCase?.id, initialDecision, manual]);
 
-  // Prefill the draft + AI advice from the LAST stored generation for this
-  // (case × decision × seed) triple. Every generation is persisted server-side
-  // in `justification_generations`, so reopening the same reference should
-  // show the same AI text without regenerating. Each reference-seed × action
-  // pair has its own row, so switching the seed/decision toggle reloads the
-  // matching cached result if one exists — and RESETS to the case default
-  // if it doesn't (otherwise the previous seed's text bleeds through).
+  // Prefill the AI SUGGESTION panel (never the officer's 12(b)) from the LAST
+  // stored generation for this (case × decision × seed) triple. Every
+  // generation is persisted server-side in `justification_generations`, so
+  // reopening the same reference shows the same AI text without regenerating.
+  // Switching seed/decision clears the suggestion and reloads the matching
+  // cached one, if any. The officer's own text is left exactly as it is.
   useEffect(() => {
     if (!open || !selectedCase?.id) return;
     const seedId = seedSimilarCase?.id || "none";
@@ -429,26 +458,9 @@ export function JustificationPanel({
     if (prefillKeyRef.current === key) return;
     prefillKeyRef.current = key;
 
-    // Reset to the correct baseline BEFORE the async lookup:
-    //   - seed selected → blank draft. The reviewer should Generate for THIS
-    //     seed; falling back to `selectedCase.justification` would show
-    //     whatever the previous seed produced (since Confirm/Save-Draft writes
-    //     that field) and make two seeds look identical.
-    //   - no seed → use the case's stored justification (edit-in-place flow).
-    //   - host owns the field and there is no seed (the copy dialog's manual
-    //     entry) → whatever the host's Q12b_Jus row currently holds. The
-    //     reviewer may have typed there and not saved yet; the case's stored
-    //     justification is older than what is on screen.
-    const fallbackDraft =
-      !seedSimilarCase && externalJustification !== undefined
-        ? externalJustification
-        : seedSimilarCase
-          ? ""
-          : selectedCase.justification || "";
-    setDraft(fallbackDraft);
+    setAiSuggestion("");
     setAiAdvice(null);
     setHasGeneratedOnce(false);
-    setDraftTouched(false);
 
     let cancelled = false;
     (async () => {
@@ -467,12 +479,7 @@ export function JustificationPanel({
         if (cancelled || !row) return;
         const gen = row.generatedJustification as string | undefined;
         if (typeof gen === "string" && gen.trim().length > 0) {
-          // Only fill an EMPTY draft. The baseline set above is the case's
-          // saved justification (or the host's live Q12b_Jus), and the
-          // reviewer may already be typing by the time this lookup returns —
-          // a cached generation must never replace either. Previously it did,
-          // so a hand-edited draft came back as the older AI text on reopen.
-          setDraft((current) => (current.trim().length === 0 ? gen : current));
+          setAiSuggestion((current) => (current.trim().length === 0 ? gen : current));
           setHasGeneratedOnce(true);
           if (row.aiDecision) {
             setAiAdvice({
@@ -488,21 +495,14 @@ export function JustificationPanel({
     return () => {
       cancelled = true;
     };
-  }, [open, selectedCase?.id, decision, seedSimilarCase?.id, selectedCase?.justification]);
+  }, [open, selectedCase?.id, decision, seedSimilarCase?.id]);
 
-  // Mirror the host's EG-form justification into the draft: they are one
-  // field. Adoption is deliberately conservative — only when the reviewer has
-  // not typed or generated, so their work is never overwritten silently. The
-  // host bumps `externalJustificationVersion` for an explicit "Use this text",
-  // which adopts regardless. Never adopts on mount: a seeded panel starts
-  // blank on purpose so the reviewer generates for THAT seed.
-  //
-  // An EMPTY draft is the exception. `draftTouched` latches on the first
-  // keystroke or generation and is only cleared when the case, decision or
-  // seed changes — so after generating once, or after the decision toggle
-  // resets the draft, typing in the host's Q12b_Jus row was ignored and the
-  // Confirm button (gated on `draft`) stayed disabled with text visibly on
-  // screen. There is no work to protect when the draft is blank.
+  // Mirror the host's EG-form Q12b_Jus into the officer's 12(b): they are one
+  // field. Adoption is deliberately conservative — only when the officer has
+  // not typed here, so their work is never overwritten silently. The host
+  // bumps `externalJustificationVersion` for an explicit "Use in
+  // justification", which adopts regardless. An EMPTY field always adopts:
+  // there is no work to protect, and Confirm is gated on this field.
   const externalTextRef = useRef<string | undefined>(externalJustification);
   const externalVersionRef = useRef<number | undefined>(
     externalJustificationVersion,
@@ -533,6 +533,8 @@ export function JustificationPanel({
       ? selectedCase.status
       : null;
   const isBusy = isGenerating || isUpdating || isSavingDraft;
+  // Gated on the OFFICER'S 12(b) only — an AI suggestion alone can never be
+  // confirmed as the case's 12(b).
   const canConfirm =
     !!selectedCase && draft.trim().length > 0 && !isBusy;
 
@@ -582,7 +584,8 @@ export function JustificationPanel({
     setGenerateError(null);
     let result: GenerateResult | string;
     try {
-      result = await onGenerate(inputs, decision, seedSimilarCase, {
+      // The AI sees the officer's current 12(b) as the existing remarks.
+      result = await onGenerate({ ...inputs, Q12b_Jus: draft }, decision, seedSimilarCase, {
         userContext,
         rejectReason: effectiveRejectReason,
         manual,
@@ -610,9 +613,8 @@ export function JustificationPanel({
     const aiReasoning =
       typeof result === "string" ? undefined : result?.aiReasoning;
     if (text.length > 0) {
-      setDraft(text);
-      setDraftTouched(true);
-      onDraftChange?.(text);
+      // Reference only: the officer's 12(b) (`draft`) is NOT touched.
+      setAiSuggestion(text);
       setHasGeneratedOnce(true);
       if (aiDecision) {
         setAiAdvice({ decision: aiDecision, reasoning: aiReasoning || "" });
@@ -620,6 +622,15 @@ export function JustificationPanel({
         setAiAdvice(null);
       }
     }
+  };
+
+  /** Explicit opt-in: put the AI suggestion into the officer's 12(b). */
+  const copyAiIntoQ12b = () => {
+    if (!aiSuggestion.trim()) return;
+    const next = insertAiTextIntoQ12b(draft, aiSuggestion);
+    setDraft(next);
+    setDraftTouched(true);
+    onDraftChange?.(next);
   };
 
   // Does the AI's recommendation align with the reviewer's chosen decision?
@@ -658,11 +669,8 @@ export function JustificationPanel({
   const buildEgPatch = (): Record<string, string> => {
     const init = initialInputsRef.current;
     const patch: Record<string, string> = {};
-    // With the host showing Q12b_Jus itself, the draft is the only source —
-    // confirm / save-draft write it, so don't also patch from the hidden input.
-    if (!hideEgRemarksInput && inputs.Q12b_Jus !== init.Q12b_Jus) {
-      patch.Q12b_Jus = inputs.Q12b_Jus;
-    }
+    // Q12b_Jus is deliberately absent: the officer's 12(b) field (`draft`) is
+    // the only source, and the host writes it on confirm / save draft.
     for (const field of EG_DECISION_FIELDS) {
       if (inputs[field] !== init[field]) patch[field] = inputs[field];
     }
@@ -690,12 +698,9 @@ export function JustificationPanel({
 
   const handleSaveDraft = async () => {
     if (!canSaveDraft || !onSaveDraft) return;
-    setSaveConfirmOpen(false);
     await onSaveDraft({
+      // Both are the OFFICER'S 12(b). The AI suggestion is never saved here.
       justification: draft,
-      // Force Q12b_Jus to the current draft — this is what the confirm dialog
-      // warned about: saving the draft OVERRIDES the case's existing remarks
-      // so subsequent copy/edit views see the latest AI-authored text.
       q12bJus: draft,
       egPatch: buildEgPatch(),
       applicationPatch: buildApplicationPatch(),
@@ -882,24 +887,6 @@ export function JustificationPanel({
                     disabled={isBusy}
                   />
                 </div>
-                {!hideEgRemarksInput && (
-                <div className="space-y-1 sm:col-span-2">
-                  <Label className="text-xs">
-                    EG justification remarks (Q12b_Jus)
-                  </Label>
-                  <Textarea
-                    rows={3}
-                    value={inputs.Q12b_Jus}
-                    onChange={(e) => updateInput("Q12b_Jus", e.target.value)}
-                    disabled={isBusy}
-                    placeholder="Existing EG remarks on this case (may be empty)."
-                  />
-                  <p className="text-[11px] text-muted-foreground">
-                    Existing remarks from the EG form. Feeds AI generation and
-                    is saved back to the EG form when you save or confirm.
-                  </p>
-                </div>
-                )}
               </div>
             )}
           </div>
@@ -1041,26 +1028,83 @@ export function JustificationPanel({
 
           <Separator />
 
-          {/* Justification draft */}
-          <div className="space-y-2">
-            <Label htmlFor="justification-draft" className="text-sm">
-              {hasSaved && !hasGeneratedOnce
-                ? "Existing justification (edit before saving or confirming)"
-                : "Justification"}
-            </Label>
-            <Textarea
-              id="justification-draft"
-              value={draft}
-              onChange={(e) => {
-                setDraft(e.target.value);
-                setDraftTouched(true);
-                onDraftChange?.(e.target.value);
-              }}
-              placeholder="Write a justification, or click Generate with AI..."
-              rows={12}
-              className="text-sm min-h-[220px]"
-              disabled={isUpdating || isSavingDraft}
-            />
+          {/* Officer's 12(b) (left) and the AI suggestion (right) are two
+              separate areas. Only the officer's text is ever saved as 12(b);
+              the AI text is a reference and reaches 12(b) only through the
+              explicit "Copy AI text into my 12(b)" button. */}
+          <div className="grid grid-cols-1 xl:grid-cols-2 gap-4 items-start">
+            <div className="space-y-2" data-testid="officer-q12b-section">
+              <Label htmlFor="justification-draft" className="text-sm">
+                Your 12(b) justification{" "}
+                <span className="font-normal text-muted-foreground">
+                  (saved as Q12b_Jus)
+                </span>
+              </Label>
+              <Textarea
+                id="justification-draft"
+                data-testid="officer-q12b"
+                value={draft}
+                onChange={(e) => {
+                  setDraft(e.target.value);
+                  setDraftTouched(true);
+                  onDraftChange?.(e.target.value);
+                }}
+                placeholder="Write the 12(b) justification in your own words. This is what will be recorded."
+                rows={12}
+                className="text-sm min-h-[220px]"
+                disabled={isUpdating || isSavingDraft}
+              />
+              <p className="text-[11px] text-muted-foreground">
+                This is the final 12(b). Confirm and Save Draft record exactly
+                this text.
+              </p>
+            </div>
+
+            <div
+              className="space-y-2 rounded-lg border border-dashed border-primary/40 bg-primary/5 p-3"
+              data-testid="ai-suggestion-panel"
+            >
+              <div className="flex items-center gap-2 flex-wrap">
+                <Sparkles className="w-4 h-4 text-primary" />
+                <span className="text-sm font-medium">AI suggestion</span>
+                <Badge variant="outline" className="text-[10px]">
+                  reference only — not saved as 12(b)
+                </Badge>
+              </div>
+              {aiSuggestion.trim().length > 0 ? (
+                <>
+                  <div
+                    data-testid="ai-suggestion-text"
+                    aria-readonly="true"
+                    className="text-sm whitespace-pre-wrap rounded-md border bg-background p-2 max-h-[260px] overflow-y-auto"
+                  >
+                    {aiSuggestion}
+                  </div>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={copyAiIntoQ12b}
+                    disabled={isBusy}
+                    className="gap-1"
+                    data-testid="copy-ai-to-q12b"
+                  >
+                    <ClipboardCopy className="w-4 h-4" />
+                    Copy AI text into my 12(b)
+                  </Button>
+                  <p className="text-[11px] text-muted-foreground">
+                    Copying adds the AI text to your 12(b) (below anything you
+                    have already written). You can edit it afterwards.
+                  </p>
+                </>
+              ) : (
+                <p className="text-xs text-muted-foreground">
+                  Click &ldquo;Generate with AI&rdquo; for a suggested
+                  wording. It appears here for reference and does not change
+                  your 12(b).
+                </p>
+              )}
+            </div>
           </div>
 
           {/* Advisory AI-decision panel. Read-only — Approve/Reject click still governs. */}
@@ -1129,7 +1173,7 @@ export function JustificationPanel({
           {onSaveDraft && (
             <Button
               variant="secondary"
-              onClick={() => setSaveConfirmOpen(true)}
+              onClick={handleSaveDraft}
               disabled={!canSaveDraft}
               className="gap-1"
             >
@@ -1158,45 +1202,6 @@ export function JustificationPanel({
         </DialogFooter>
     </div>
 
-    <AlertDialog open={saveConfirmOpen} onOpenChange={setSaveConfirmOpen}>
-      <AlertDialogContent>
-        <AlertDialogHeader>
-          <AlertDialogTitle className="flex items-center gap-2">
-            <AlertTriangle className="w-5 h-5 text-amber-600" />
-            Override existing EG remarks?
-          </AlertDialogTitle>
-          <AlertDialogDescription asChild>
-            <div className="space-y-2">
-              <p>
-                Saving this draft will <strong>overwrite the case&apos;s
-                existing Q12b_Jus</strong> with the current text. Any prior
-                remarks stored on the case will be replaced.
-              </p>
-              <p>
-                Subsequent Copy / Edit views of this case will populate with the
-                new value. The case status will not change — only the
-                justification text.
-              </p>
-            </div>
-          </AlertDialogDescription>
-        </AlertDialogHeader>
-        <AlertDialogFooter>
-          <AlertDialogCancel disabled={isSavingDraft}>Cancel</AlertDialogCancel>
-          <AlertDialogAction
-            onClick={handleSaveDraft}
-            disabled={isSavingDraft}
-            className="gap-1"
-          >
-            {isSavingDraft ? (
-              <Loader2 className="w-4 h-4 animate-spin" />
-            ) : (
-              <Save className="w-4 h-4" />
-            )}
-            {isSavingDraft ? "Saving..." : "Save & Override"}
-          </AlertDialogAction>
-        </AlertDialogFooter>
-      </AlertDialogContent>
-    </AlertDialog>
     </>
   );
 }

@@ -512,7 +512,8 @@ export function SimilarCaseReplaceDialog({
   }
 
   /**
-   * The panel's draft changed (typed or generated) — mirror it into the EG
+   * The officer's 12(b) in the panel changed (typed, or AI text explicitly
+   * copied in — Generate alone never fires this) — mirror it into the EG
    * Form row so both sides show one value. Text matching the case's stored
    * value clears the pending edit rather than recording a no-op change.
    */
@@ -1435,8 +1436,9 @@ export function SimilarCaseReplaceDialog({
                 manual={manual}
                 // The EG tab already shows Q12c–Q12g; don't duplicate them.
                 hideDecisionDetails
-                // The EG Form tab owns Q12b_Jus — mirror it both ways so the
-                // two are one field, and hide the panel's duplicate input.
+                // The EG Form tab owns Q12b_Jus — mirror it both ways with the
+                // panel's officer 12(b) field so the two are one field. The
+                // panel's AI suggestion is separate and never mirrored.
                 externalJustification={egJustificationValue}
                 externalJustificationVersion={egTextVersion}
                 externalRejectReason={egRejectReasonValue}
