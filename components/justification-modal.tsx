@@ -1034,12 +1034,14 @@ export function JustificationPanel({
               explicit "Copy AI text into my 12(b)" button. */}
           <div className="grid grid-cols-1 xl:grid-cols-2 gap-4 items-start">
             <div className="space-y-2" data-testid="officer-q12b-section">
-              <Label htmlFor="justification-draft" className="text-sm">
-                Your 12(b) justification{" "}
-                <span className="font-normal text-muted-foreground">
-                  (saved as Q12b_Jus)
-                </span>
-              </Label>
+              <div className="flex items-center gap-2 flex-wrap">
+                <Label htmlFor="justification-draft" className="text-sm">
+                  Your 12(b) justification
+                </Label>
+                <Badge variant="secondary" className="text-[10px]">
+                  saved as Q12b_Jus
+                </Badge>
+              </div>
               <Textarea
                 id="justification-draft"
                 data-testid="officer-q12b"
