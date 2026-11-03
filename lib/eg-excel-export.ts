@@ -35,6 +35,7 @@
 import type { Case } from "@/app/api/cases/types";
 import { clean, deriveEgDefaults, pick } from "@/lib/eg-form";
 import { applyRecordAdminDefaults } from "@/lib/record-admin-defaults";
+import { resolveAppCat } from "@/lib/app-cat";
 
 export const EG_FORM_COLUMNS = [
   "Ref", "Tranche", "EB_RM", "NO", "NO_R", "Staff1", "Staff2", "Staff1_Info",
@@ -183,7 +184,8 @@ export function buildEgFormRow(caseItem: Case): ExportRow {
     Staff1: eg.Staff1, Staff2: eg.Staff2,
     Staff1_Info: eg.Staff1_Info, Staff2_Info: eg.Staff2_Info,
     Applicant: pick(eg.Applicant, eg.App_Type),
-    App_Cat: egOr("App_Cat"),
+    // Column K: Procurement / Rental only (never PA_RefL's Yes/No).
+    App_Cat: resolveAppCat(eg, app),
     App_PName: pick(eg.App_PName, app.PA_PName, eg.App_PNam_Mod),
     D_ReqF_SWD: eg.D_ReqF_SWD, D_PlnT_SWD: eg.D_PlnT_SWD,
     SWD_Off_N: eg.SWD_Off_N, SWD_Off_P: eg.SWD_Off_P, SWD_Off_I: eg.SWD_Off_I,
@@ -249,7 +251,8 @@ export function buildRecordAdminRow(caseItem: Case): ExportRow {
     // The reference workbook keeps the responsible officer's first name here.
     Staff: pick(eg.Staff, clean(eg.Staff1).split(/[\s(]/)[0]),
     App_Type: pick(eg.App_Type, eg.Applicant),
-    App_Cat: pick(eg.App_Cat, "Procurement"),
+    // Column Q: Procurement / Rental only (never PA_RefL's Yes/No).
+    App_Cat: resolveAppCat(stored, app),
     App_PNam_Mod: pick(eg.App_PNam_Mod, app.PA_PName),
     // Stored answer first; otherwise what the case actually holds; the
     // Step 2 default ("Yes") is already in `eg` as the last resort.

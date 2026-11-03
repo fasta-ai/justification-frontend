@@ -1,4 +1,5 @@
 import { useState, useCallback } from "react";
+import { normaliseAppCat } from "@/lib/app-cat";
 
 interface SimilarMatchItem {
   /** Reference-list category. Sent as a ranking boost — never a filter —
@@ -108,6 +109,25 @@ export function buildSimilarMatchRequest(options: SimilarMatchesOptions) {
 }
 
 /**
+ * Category shown for a similar-case row. When the row carries an App_Cat it
+ * is normalised the same way the registers/exports are (Procurement/Rental;
+ * legacy values such as a PA_RefL "Yes"/"No" fall back to Procurement). Rows
+ * with no App_Cat (older catalogue/reference rows) fall back to their
+ * reference-list category, RefL_Cat then PA_Cat, else "".
+ */
+export function similarMatchCategory(
+  metadata: Record<string, unknown> | null | undefined,
+): string {
+  const appCat = metadata?.App_Cat;
+  if (appCat !== undefined && appCat !== null && String(appCat).trim()) {
+    return normaliseAppCat(appCat);
+  }
+  const text = (v: unknown) =>
+    v === undefined || v === null ? "" : String(v).trim();
+  return text(metadata?.RefL_Cat) || text(metadata?.PA_Cat) || "";
+}
+
+/**
  * Client hook for the tiered similar-case endpoint (`/api/datasets/match`).
  * Maps the item's PA_* fields into the tiered request shape.
  */
@@ -175,7 +195,7 @@ export function useSimilarMatches(): UseSimilarMatchesReturn {
                 metadata.Company ||
                 "Unknown",
               similarity: typeof m.score === "number" ? m.score : 0,
-              category: metadata.App_Cat || metadata.RefL_Cat || metadata.PA_Cat || "",
+              category: similarMatchCategory(metadata),
               description: metadata.Q12b_Jus || metadata.Justify || "",
               approvalStatus: metadata.Q12a || metadata.Q12a_T4 || "",
               metadata,
