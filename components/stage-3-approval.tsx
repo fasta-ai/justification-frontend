@@ -698,17 +698,24 @@ export function Stage3Approval({ onBack }: Stage3ApprovalProps) {
     }
     setIsExportingExcel(true);
     try {
-      // Most recently worked-on case first in the file. The table keeps its
-      // own sort; this only orders the rows written to the workbook.
-      const ts = (c: Case) =>
-        Date.parse(c.updatedAt || c.createdAt || "") || 0;
-      const ordered = [...trancheCases].sort((a, b) => ts(b) - ts(a));
-      const { fileName, caseCount, decidedCount } =
-        await exportCasesToExcel(ordered);
+      // Row order (latest D_Entry first, on all three sheets) is decided by
+      // exportCasesToExcel itself; the table keeps its own sort.
+      const { fileName, caseCount, decidedCount, missingApplication } =
+        await exportCasesToExcel(trancheCases);
       toast.success(
         `Exported ${caseCount} case${caseCount === 1 ? "" : "s"} to ${fileName}` +
           ` — ${decidedCount} decided in A_EG_Form`,
       );
+      if (missingApplication.length > 0) {
+        const n = missingApplication.length;
+        toast.warning(
+          `${n} case${n === 1 ? " has" : "s have"} no extracted application form, ` +
+            `so A_PA_Form is mostly blank for ${n === 1 ? "it" : "them"}: ` +
+            `${missingApplication.join(", ")}. Re-upload the application form on ` +
+            `${n === 1 ? "that case" : "those cases"}.`,
+          { duration: 15000 },
+        );
+      }
     } catch (error) {
       console.error("Error exporting Excel sheets:", error);
       toast.error(
