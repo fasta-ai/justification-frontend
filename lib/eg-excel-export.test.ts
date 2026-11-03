@@ -1,4 +1,7 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import PizZip from "pizzip";
+import { read, utils } from "xlsx";
+import { KNOWN_COLUMNS } from "@/lib/case-import/registers";
 import type { Case } from "@/app/api/cases/types";
 import {
   EG_FORM_COLUMNS,
@@ -7,6 +10,7 @@ import {
   buildEgFormRow,
   buildPaFormRow,
   buildRecordAdminRow,
+  exportCasesToExcel,
   exportableCases,
   toExcelDate,
   toExcelNumber,
@@ -215,5 +219,99 @@ describe("exportableCases", () => {
       { ...approved, id: "c4", status: "under_review" as const },
     ];
     expect(exportableCases(list).map((c) => c.id)).toEqual(["c1", "c2"]);
+  });
+});
+
+describe("App_Cat (Procurement / Rental only)", () => {
+  const rental: Case = {
+    ...approved,
+    id: "rental",
+    egData: { ...approved.egData, App_Cat: "Rental" },
+    applicationData: { ...approved.applicationData, PA_RefL: "Yes" },
+  };
+  const procurementWithNo: Case = {
+    ...approved,
+    id: "procurement",
+    egData: { ...approved.egData, App_Cat: "" },
+    applicationData: { ...approved.applicationData, PA_RefL: "No" },
+  };
+  const leakedYes: Case = {
+    ...approved,
+    id: "leaked",
+    egData: { ...approved.egData, App_Cat: "Yes" },
+  };
+
+  it("sits at column K (11th) of A_EG_Form and Q (17th) of A_Record_Admin", () => {
+    expect(EG_FORM_COLUMNS.indexOf("App_Cat")).toBe(10);
+    expect(RECORD_ADMIN_COLUMNS.indexOf("App_Cat")).toBe(16);
+    expect(utils.encode_col(EG_FORM_COLUMNS.indexOf("App_Cat"))).toBe("K");
+    expect(utils.encode_col(RECORD_ADMIN_COLUMNS.indexOf("App_Cat"))).toBe("Q");
+    // The importer reads the client's registers with the same layout.
+    expect(KNOWN_COLUMNS.eg).toEqual([...EG_FORM_COLUMNS]);
+    expect(KNOWN_COLUMNS.recordAdmin).toEqual([...RECORD_ADMIN_COLUMNS]);
+  });
+
+  it("exports a stored Rental on both sheets", () => {
+    expect(buildEgFormRow(rental).App_Cat).toBe("Rental");
+    expect(buildRecordAdminRow(rental).App_Cat).toBe("Rental");
+  });
+
+  it("never lets PA_RefL's Yes/No through, and repairs a leaked Yes", () => {
+    for (const c of [procurementWithNo, leakedYes, approved]) {
+      expect(buildEgFormRow(c).App_Cat).toBe("Procurement");
+      expect(buildRecordAdminRow(c).App_Cat).toBe("Procurement");
+    }
+  });
+
+  describe("exportCasesToExcel workbooks", () => {
+    afterEach(() => vi.restoreAllMocks());
+
+    async function exportZip(cases: Case[]): Promise<PizZip> {
+      let blob: Blob | undefined;
+      const origCreate = URL.createObjectURL;
+      const origRevoke = URL.revokeObjectURL;
+      URL.createObjectURL = ((b: Blob) => {
+        blob = b;
+        return "blob:test";
+      }) as typeof URL.createObjectURL;
+      URL.revokeObjectURL = () => {};
+      vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {});
+      try {
+        await exportCasesToExcel(cases);
+      } finally {
+        URL.createObjectURL = origCreate;
+        URL.revokeObjectURL = origRevoke;
+      }
+      const buf = await new Promise<ArrayBuffer>((resolve, reject) => {
+        const fr = new FileReader();
+        fr.onload = () => resolve(fr.result as ArrayBuffer);
+        fr.onerror = () => reject(fr.error);
+        fr.readAsArrayBuffer(blob!);
+      });
+      return new PizZip(buf);
+    }
+
+    function sheetOf(zip: PizZip, file: string) {
+      const wb = read(zip.file(file)!.asUint8Array(), { type: "array" });
+      return wb.Sheets[wb.SheetNames[0]];
+    }
+
+    it("writes Rental / Procurement at A_EG_Form K and A_Record_Admin Q", async () => {
+      const zip = await exportZip([rental, procurementWithNo, leakedYes]);
+      const eg = sheetOf(zip, "A_EG_Form.xlsx");
+      const ra = sheetOf(zip, "A_Record_Admin.xlsx");
+      expect(eg.K1.v).toBe("App_Cat");
+      expect(ra.Q1.v).toBe("App_Cat");
+      expect([eg.K2.v, eg.K3.v, eg.K4.v]).toEqual(["Rental", "Procurement", "Procurement"]);
+      expect([ra.Q2.v, ra.Q3.v, ra.Q4.v]).toEqual(["Rental", "Procurement", "Procurement"]);
+      for (const sheet of [eg, ra]) {
+        const col = sheet === eg ? "K" : "Q";
+        const values = utils
+          .sheet_to_json<string[]>(sheet, { header: 1 })
+          .slice(1)
+          .map((r) => r[utils.decode_col(col)]);
+        for (const v of values) expect(["Procurement", "Rental"]).toContain(v);
+      }
+    });
   });
 });

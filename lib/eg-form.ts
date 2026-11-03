@@ -15,6 +15,7 @@
  */
 
 import type { Case } from "@/app/api/cases/types";
+import { parseAppCat, resolveAppCat } from "@/lib/app-cat";
 
 export const EG_FORM_TEMPLATE_URL = "/eg_form_template.docx";
 
@@ -118,7 +119,7 @@ export function deriveEgDefaults(
   const justification = clean(caseItem.justification);
 
   const derived: Record<string, string> = {
-    App_Cat: "Procurement",
+    App_Cat: resolveAppCat(eg, app),
     App_PNam_Mod: pick(app.PA_PName),
     Q12a: isApproved ? "Yes" : isRejected ? "No" : "",
     Q12b_Jus: justification,
@@ -131,6 +132,11 @@ export function deriveEgDefaults(
   const out: Record<string, string> = {};
   for (const [key, value] of Object.entries(derived)) {
     if (value && !clean(eg[key])) out[key] = value;
+  }
+  // A stored App_Cat that names no category (e.g. a Yes/No that leaked in
+  // from PA_RefL) is as good as blank: replace it with the real category.
+  if (clean(eg.App_Cat) && parseAppCat(eg.App_Cat) === null) {
+    out.App_Cat = derived.App_Cat;
   }
   return out;
 }
@@ -182,7 +188,7 @@ export function buildEgFormData(caseItem: Case): EgFormData {
 
   return {
     Applicant: pick(eg.Applicant, eg.App_Type),
-    App_Cat: pick(eg.App_Cat, "Procurement"),
+    App_Cat: resolveAppCat(eg, app),
     App_PName: pick(eg.App_PName, app.PA_PName, eg.App_PNam_Mod),
     D_ReqF_SWD: formatDate(eg.D_ReqF_SWD),
     D_PlnT_SWD: formatDate(eg.D_PlnT_SWD),

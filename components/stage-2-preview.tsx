@@ -6,6 +6,7 @@ import {
   applyRecordAdminDefaults,
   recordAdminDefault,
 } from "@/lib/record-admin-defaults";
+import { resolveAppCat } from "@/lib/app-cat";
 import {
   Edit2,
   Check,
@@ -110,9 +111,9 @@ function EditDialog({ product, isOpen, onClose, onSave }: EditDialogProps) {
   ];
 
   const getData = useCallback((prod: Product, key: string) => {
-    if (key == "App_Cat") {
-      const egVal = prod.applicationData?.data?.["PA_RefL"];
-      if (egVal !== undefined) return egVal;
+    // Procurement / Rental only - never the PA_RefL Yes/No flag.
+    if (key === "App_Cat") {
+      return resolveAppCat(prod.egData?.data, prod.applicationData?.data);
     }
     // Yes/No tracking columns: a stored answer wins, otherwise the shared
     // default (also applied when the case is created, see handleConfirm).
@@ -646,9 +647,15 @@ export function Stage2Preview({ onNext, onBack }: Stage2PreviewProps) {
             status: "pending" as const,
             recdEG: true,
             catalogueData: product.catalogueData?.data || {},
-            // Persist the Yes/No tracking defaults the preview shows, so Step 3
-            // and the A_Record_Admin export see the same values.
-            egData: applyRecordAdminDefaults(product.egData?.data || {}),
+            // Persist the Yes/No tracking defaults and the App_Cat the preview
+            // shows, so Step 3 and the exports see the same values.
+            egData: {
+              ...applyRecordAdminDefaults(product.egData?.data || {}),
+              App_Cat: resolveAppCat(
+                product.egData?.data,
+                product.applicationData?.data,
+              ),
+            },
             applicationData: product.applicationData?.data || {},
             categoryId: product.category || undefined,
             tranche: product.tranch || undefined,
@@ -721,11 +728,12 @@ export function Stage2Preview({ onNext, onBack }: Stage2PreviewProps) {
   const handleExportExcel = useCallback(() => {
     // Helper function to get data (same logic as table display)
     const getData = (product: Product, key: string) => {
-      if (key == "App_Cat") {
-        // Special case for App_Cat to fallback to product category
-        const egVal = product.applicationData?.data?.["PA_RefL"];
-        if (egVal !== undefined && egVal === "Yes") return "Procurement";
-        else return "Procurement";
+      // Procurement / Rental only - never the PA_RefL Yes/No flag.
+      if (key === "App_Cat") {
+        return resolveAppCat(
+          product.egData?.data,
+          product.applicationData?.data,
+        );
       }
       // Yes/No tracking columns: a stored answer wins, otherwise the shared
       // default (also applied when the case is created, see handleConfirm).
@@ -836,11 +844,12 @@ export function Stage2Preview({ onNext, onBack }: Stage2PreviewProps) {
   const handleExportARecordOnly = useCallback(() => {
     // Helper function to get data (same logic as table display)
     const getData = (product: Product, key: string) => {
-      if (key == "App_Cat") {
-        // Special case for App_Cat to fallback to product category
-        const egVal = product.applicationData?.data?.["PA_RefL"];
-        if (egVal !== undefined && egVal === "Yes") return "Procurement";
-        else return "Procurement";
+      // Procurement / Rental only - never the PA_RefL Yes/No flag.
+      if (key === "App_Cat") {
+        return resolveAppCat(
+          product.egData?.data,
+          product.applicationData?.data,
+        );
       }
       // Yes/No tracking columns: a stored answer wins, otherwise the shared
       // default (also applied when the case is created, see handleConfirm).
@@ -1110,10 +1119,13 @@ export function Stage2Preview({ onNext, onBack }: Stage2PreviewProps) {
                 {filteredProducts.map((product) => {
                   const isConfirmed = confirmedProducts.has(product.id);
                   const getData = (key: string) => {
-                    if (key == "App_Cat") {
-                      // Special case for App_Cat to fallback to product category
-                      const egVal = product.applicationData?.data?.["PA_RefL"];
-                      if (egVal !== undefined) return egVal;
+                    // Procurement / Rental only - never the PA_RefL Yes/No
+                    // flag (this cell used to show it raw).
+                    if (key === "App_Cat") {
+                      return resolveAppCat(
+                        product.egData?.data,
+                        product.applicationData?.data,
+                      );
                     }
                     // One source of truth for the tracking-column defaults
                     // (this used to hard-code "Yes"/"NO" here and drift from
