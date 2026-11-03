@@ -41,6 +41,7 @@ import type {
 } from "@/hooks/use-application-upload";
 import { useCatalogueUpload } from "@/hooks/use-catalogue-upload";
 import type { Product, ProductFile, ExtractedData } from "@/lib/types";
+import { mergeOntoExtracted } from "@/lib/merge-extracted";
 
 const fileTypes = [
   {
@@ -448,11 +449,24 @@ function ProductUploadCard({
     onUpdate,
   ]);
 
+  // The latest stored extraction, for patches that land from async callbacks
+  // (see mergeOntoExtracted: they must never replace the section wholesale).
+  const storedAppDataRef = useRef<Record<string, any> | undefined>(undefined);
+  storedAppDataRef.current = product.applicationData?.data;
+  const storedEgDataRef = useRef<Record<string, any> | undefined>(undefined);
+  storedEgDataRef.current = product.egData?.data;
+
   const handleApplicationUpload = useCallback(
     (file: File) => {
       uploadApplicationForm(file)
         .then((data) => {
           onUpdate({ applicationData: data });
+          // Keep the preview's editable copy in step with the new extraction,
+          // so later edits / AI patches build on it rather than on {}.
+          storedAppDataRef.current = data?.data;
+          if (data?.data && typeof data.data === "object") {
+            setEditableAppData(JSON.parse(JSON.stringify(data.data)));
+          }
         })
         .catch((err) => {
           console.error("Failed to upload application form:", err);
@@ -476,7 +490,9 @@ function ProductUploadCard({
   const acceptSuggestion = useCallback(
     (field: string, value: any) => {
       setEditableAppData((prev) => {
-        const merged = { ...prev, [field]: value };
+        const merged = mergeOntoExtracted(prev, storedAppDataRef.current, {
+          [field]: value,
+        });
         onUpdate({ applicationData: { data: merged } });
         return merged;
       });
@@ -504,8 +520,11 @@ function ProductUploadCard({
     const entries = Object.entries(applicationAiReview.applied ?? {});
     if (entries.length === 0) return;
     setEditableAppData((prev) => {
-      const merged = { ...prev };
-      for (const [field, change] of entries) merged[field] = change.to;
+      const merged = mergeOntoExtracted(
+        prev,
+        storedAppDataRef.current,
+        Object.fromEntries(entries.map(([field, change]) => [field, change.to])),
+      );
       onUpdate({ applicationData: { data: merged } });
       return merged;
     });
@@ -520,7 +539,9 @@ function ProductUploadCard({
       const change = applicationAiReview?.applied?.[field];
       if (!change) return;
       setEditableAppData((prev) => {
-        const merged = { ...prev, [field]: change.from ?? "" };
+        const merged = mergeOntoExtracted(prev, storedAppDataRef.current, {
+          [field]: change.from ?? "",
+        });
         onUpdate({ applicationData: { data: merged } });
         return merged;
       });
@@ -540,7 +561,9 @@ function ProductUploadCard({
   const acceptEgSuggestion = useCallback(
     (field: string, value: any) => {
       setEditableEgData((prev) => {
-        const merged = { ...prev, [field]: value };
+        const merged = mergeOntoExtracted(prev, storedEgDataRef.current, {
+          [field]: value,
+        });
         onUpdate({ egData: { data: merged } });
         return merged;
       });
@@ -564,6 +587,10 @@ function ProductUploadCard({
         .then((data) => {
           // Automatically set product name to {NO}{NO_R}
           const updates: any = { egData: data };
+          storedEgDataRef.current = data?.data;
+          if (data?.data && typeof data.data === "object") {
+            setEditableEgData(JSON.parse(JSON.stringify(data.data)));
+          }
 
           if (data?.data?.NO && data?.data?.NO_R) {
             updates.name = `${data.data.NO}${data.data.NO_R}`;
@@ -1958,8 +1985,18 @@ export function Stage1Upload({ onNext }: Stage1UploadProps) {
     return () => window.removeEventListener("popstate", onPopState);
   }, [hasUnsavedWork]);
 
+  // Also wait for the document extractions to finish: a case created while
+  // its application form is still extracting is saved with applicationData {}
+  // and exports a blank A_PA_Form row. (The optional AI cross-check and a
+  // catalogue waiting on a product name do not block.)
+  const extractionRunning = products.some((p) =>
+    (busyByProduct[p.id] ?? []).some((w) =>
+      ["Application form", "EG form", "Catalogue"].includes(w),
+    ),
+  );
   const canProceed =
     products.length > 0 &&
+    !extractionRunning &&
     products.every((p) => {
       const requiredTypes = ["application", "eg", "catalogue"];
       return requiredTypes.every((type) =>
