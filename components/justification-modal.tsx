@@ -27,6 +27,16 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { cn } from "@/lib/utils";
 import type { Case } from "@/app/api/cases/types";
 import type { SimilarJustification } from "@/lib/types";
@@ -190,9 +200,6 @@ export interface JustificationPanelProps {
    *  showing EG fields can prefill the ones the decision determines — Q12a
    *  above all — instead of displaying an answer from an earlier decision. */
   onDecisionChange?: (decision: "approved" | "rejected") => void;
-  /** Kept for API compatibility. The officer's 12(b) field in this panel is
-   *  the Q12b_Jus input, so there is no separate remarks input any more. */
-  hideEgRemarksInput?: boolean;
   /** Q12f_RReject as the host currently holds it. Required whenever
    *  `hideDecisionDetails` is set: the host then owns the rejection-reason
    *  picker, so the panel's own `inputs.Q12f_RReject` goes stale the moment
@@ -371,7 +378,6 @@ export function JustificationPanel({
   externalJustificationVersion,
   onDraftChange,
   onDecisionChange,
-  hideEgRemarksInput = false,
   externalRejectReason,
   externalDirty = false,
 }: JustificationPanelProps) {
@@ -407,6 +413,7 @@ export function JustificationPanel({
     decision: string;
     reasoning: string;
   } | null>(null);
+  const [saveConfirmOpen, setSaveConfirmOpen] = useState(false);
 
   // Snapshots for dirty tracking — captured whenever we (re)open on a case.
   const initialInputsRef = useRef<JustificationInputs>(extractInputs(selectedCase));
@@ -523,7 +530,6 @@ export function JustificationPanel({
     setDraft(externalJustification);
   }, [externalJustification, externalJustificationVersion, draftTouched, draft]);
 
-  const hasSaved = Boolean(selectedCase?.justification?.trim());
   /**
    * The decision already recorded on this case, if any. `pending` and
    * `under_review` are not decisions — there is nothing to show for them.
@@ -696,8 +702,24 @@ export function JustificationPanel({
     return patch;
   };
 
+  // Save Draft overwrites the case's stored 12(b). Ask first whenever that
+  // would replace different, non-empty stored text; nothing to lose -> save.
+  const storedQ12b = officerQ12bFor(selectedCase);
+  const saveDraftOverwrites =
+    storedQ12b.trim().length > 0 && storedQ12b.trim() !== draft.trim();
+
+  const requestSaveDraft = () => {
+    if (!canSaveDraft || !onSaveDraft) return;
+    if (saveDraftOverwrites) {
+      setSaveConfirmOpen(true);
+      return;
+    }
+    void handleSaveDraft();
+  };
+
   const handleSaveDraft = async () => {
     if (!canSaveDraft || !onSaveDraft) return;
+    setSaveConfirmOpen(false);
     await onSaveDraft({
       // Both are the OFFICER'S 12(b). The AI suggestion is never saved here.
       justification: draft,
@@ -1175,7 +1197,7 @@ export function JustificationPanel({
           {onSaveDraft && (
             <Button
               variant="secondary"
-              onClick={handleSaveDraft}
+              onClick={requestSaveDraft}
               disabled={!canSaveDraft}
               className="gap-1"
             >
@@ -1204,6 +1226,46 @@ export function JustificationPanel({
         </DialogFooter>
     </div>
 
+    <AlertDialog open={saveConfirmOpen} onOpenChange={setSaveConfirmOpen}>
+      <AlertDialogContent>
+        <AlertDialogHeader>
+          <AlertDialogTitle className="flex items-center gap-2">
+            <AlertTriangle className="w-5 h-5 text-amber-600" />
+            Override existing EG remarks?
+          </AlertDialogTitle>
+          <AlertDialogDescription asChild>
+            <div className="space-y-2">
+              <p>
+                Saving this draft will <strong>overwrite the case&apos;s
+                existing 12(b) (Q12b_Jus)</strong> with the text in
+                &ldquo;Your 12(b) justification&rdquo;. The 12(b) currently
+                stored on the case will be replaced.
+              </p>
+              <p>
+                Subsequent Copy / Edit views of this case will populate with the
+                new value. The case status will not change — only the
+                justification text.
+              </p>
+            </div>
+          </AlertDialogDescription>
+        </AlertDialogHeader>
+        <AlertDialogFooter>
+          <AlertDialogCancel disabled={isSavingDraft}>Cancel</AlertDialogCancel>
+          <AlertDialogAction
+            onClick={handleSaveDraft}
+            disabled={isSavingDraft}
+            className="gap-1"
+          >
+            {isSavingDraft ? (
+              <Loader2 className="w-4 h-4 animate-spin" />
+            ) : (
+              <Save className="w-4 h-4" />
+            )}
+            {isSavingDraft ? "Saving..." : "Save & Override"}
+          </AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
     </>
   );
 }

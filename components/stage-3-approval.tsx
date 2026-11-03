@@ -1016,6 +1016,7 @@ export function Stage3Approval({ onBack }: Stage3ApprovalProps) {
           PA_Brand: paBrand,
           PA_Cat: paCat,
           tranche: selectedCase.tranche || "",
+          caseId: selectedCase.id,
           PA_Elaborate: paElaborate,
           egName,
           egModel: egKeys.model,
@@ -1135,6 +1136,7 @@ export function Stage3Approval({ onBack }: Stage3ApprovalProps) {
                 PA_Brand: selectedCase.applicationData?.PA_Brand || "",
                 PA_Cat: String(selectedCase.applicationData?.PA_Cat ?? ""),
                 tranche: selectedCase.tranche || "",
+                caseId: selectedCase.id,
                 PA_Elaborate:
                   selectedCase.applicationData?.PA_Elaborate ||
                   selectedCase.applicationData?.PA_Justify ||
@@ -1278,6 +1280,7 @@ export function Stage3Approval({ onBack }: Stage3ApprovalProps) {
               PA_Brand: inputs.PA_Brand,
               PA_Cat: inputs.PA_Cat,
               tranche: inputs.tranche,
+              caseId: selectedCase.id,
               PA_Elaborate: inputs.PA_Elaborate,
               egName: inputs.egName,
               egModel: inputs.egModel,
@@ -1607,7 +1610,8 @@ export function Stage3Approval({ onBack }: Stage3ApprovalProps) {
         // resending the whole section would write this render's stale snapshot
         // back over anything changed since. Q12b_Jus is the officer's
         // own 12(b) from the panel's manual field; AI suggestions are never
-        // part of the payload.
+        // part of the payload. The modal asks before this replaces a different
+        // stored 12(b) (the "Override existing EG remarks?" dialog).
         const egPatch: Record<string, unknown> = {
           ...payload.egPatch,
           Q12b_Jus: payload.q12bJus,
