@@ -1444,7 +1444,6 @@ export function SimilarCaseReplaceDialog({
                 externalRejectReason={egRejectReasonValue}
                 onDraftChange={handlePanelDraftChange}
                 onDecisionChange={setPanelDecision}
-                hideEgRemarksInput
               />
             </div>
           )}

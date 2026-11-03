@@ -126,7 +126,7 @@ describe("JustificationPanel — officer 12(b) vs AI suggestion", () => {
     expect(screen.getByRole("button", { name: /confirm approval/i })).toBeEnabled();
   });
 
-  it("Save Draft saves the officer's text as Q12b without an overwrite warning", async () => {
+  it("Save Draft saves the officer's text as Q12b without a warning when no stored 12(b) is replaced", async () => {
     const { onSaveDraft } = renderPanel();
     fireEvent.change(officerField(), { target: { value: OFFICER_TEXT } });
     await act(async () => {
@@ -140,6 +140,38 @@ describe("JustificationPanel — officer 12(b) vs AI suggestion", () => {
     expect(onSaveDraft.mock.calls[0][0].justification).toBe(OFFICER_TEXT);
     expect(onSaveDraft.mock.calls[0][0].q12bJus).toBe(OFFICER_TEXT);
     expect(screen.queryByText(/override existing eg remarks/i)).toBeNull();
+  });
+
+  it("Save Draft asks before overwriting a different stored 12(b), and saves the officer's text on confirm", async () => {
+    const { onSaveDraft } = renderPanel({
+      selectedCase: makeCase({ egData: { Q12b_Jus: "Stored 12(b)" } } as any),
+    });
+    expect(officerField().value).toBe("Stored 12(b)");
+    fireEvent.change(officerField(), { target: { value: OFFICER_TEXT } });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /save draft/i }));
+    });
+    expect(onSaveDraft).not.toHaveBeenCalled();
+    expect(await screen.findByText(/override existing eg remarks/i)).toBeInTheDocument();
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /save & override/i }));
+    });
+    expect(onSaveDraft).toHaveBeenCalledTimes(1);
+    expect(onSaveDraft.mock.calls[0][0].q12bJus).toBe(OFFICER_TEXT);
+  });
+
+  it("Save Draft cancelled from the overwrite warning saves nothing", async () => {
+    const { onSaveDraft } = renderPanel({
+      selectedCase: makeCase({ egData: { Q12b_Jus: "Stored 12(b)" } } as any),
+    });
+    fireEvent.change(officerField(), { target: { value: OFFICER_TEXT } });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /save draft/i }));
+    });
+    await act(async () => {
+      fireEvent.click(await screen.findByRole("button", { name: /^cancel$/i, hidden: false }));
+    });
+    expect(onSaveDraft).not.toHaveBeenCalled();
   });
 
   it("Copy AI text into my 12(b) copies it in (opt-in), mirrors to host, and stays editable", async () => {
@@ -181,7 +213,6 @@ describe("JustificationPanel — officer 12(b) vs AI suggestion", () => {
   it("host-owned Q12b (copy dialog) seeds the officer field even with a similar-case seed", async () => {
     renderPanel({
       externalJustification: "Typed on the left",
-      hideEgRemarksInput: true,
       hideDecisionDetails: true,
       seedSimilarCase: { id: "seed-1", productName: "X", decision: "approved", similarity: 0.9 } as any,
     });
