@@ -205,13 +205,54 @@ export function buildEgFormRow(caseItem: Case): ExportRow {
   });
 }
 
-/** A_PA_Form row: case identity + the application form as submitted. */
-export function buildPaFormRow(caseItem: Case): ExportRow {
+/**
+ * Fields the application extractor always writes ("Yes"/"No" for PA_RefL,
+ * at least "/" for the rest). A case with none of them never got its
+ * application form's extraction saved — the Stage 1 upload failed or was
+ * still running when the case was created, or (before the fix in
+ * stage-1-upload) the background AI review overwrote it with only the fields
+ * it tidied. Its A_PA_Form row would otherwise be identity columns only.
+ */
+const APPLICATION_CORE_FIELDS = ["PA_RefL", "PA_Cat", "PA_PName"] as const;
+
+/** Whether the case holds an extracted application form. */
+export function hasApplicationData(caseItem: Case): boolean {
   const { app } = sections(caseItem);
+  return APPLICATION_CORE_FIELDS.some((k) => toExcelText(app[k]) !== "");
+}
+
+/** Cases whose A_PA_Form row has no application form behind it. */
+export function casesMissingApplicationData(cases: Case[]): Case[] {
+  return cases.filter((c) => !hasApplicationData(c));
+}
+
+/**
+ * A_PA_Form row: case identity + the application form as submitted.
+ *
+ * When the application form was never extracted onto the case, the few
+ * columns that the case still knows from elsewhere are filled from there
+ * rather than left blank: the product name and total cost (EG form, which
+ * the officer confirmed) and the model (catalogue). Everything that only the
+ * application form holds (PA_RefL, PA_Cat, PA_Brand, beneficiaries,
+ * justification) stays blank — it is not on the case to export. The export
+ * reports these cases so the reviewer can re-upload the application form.
+ */
+export function buildPaFormRow(caseItem: Case): ExportRow {
+  const { app, eg, cat } = sections(caseItem);
+  const fallback: Record<string, unknown> = {};
+  if (!hasApplicationData(caseItem)) {
+    const products = Array.isArray(cat.products) ? cat.products : [];
+    const product = (products[0] ?? {}) as Record<string, unknown>;
+    fallback.PA_PName = pick(eg.App_PName, eg.App_PNam_Mod, product.product_name);
+    fallback.PA_Mod_No = pick(product.model);
+    fallback.TotAmtR = pick(eg.Q12c_TotC);
+  }
+  const appOr = (key: string) =>
+    toExcelText(app[key]) !== "" ? app[key] : fallback[key];
   return finish(PA_FORM_COLUMNS, {
     ...identity(caseItem),
-    PA_RefL: app.PA_RefL, PA_Cat: app.PA_Cat, PA_PName: app.PA_PName,
-    PA_Brand: app.PA_Brand, PA_Mod_No: app.PA_Mod_No, TotAmtR: app.TotAmtR,
+    PA_RefL: app.PA_RefL, PA_Cat: app.PA_Cat, PA_PName: appOr("PA_PName"),
+    PA_Brand: app.PA_Brand, PA_Mod_No: appOr("PA_Mod_No"), TotAmtR: appOr("TotAmtR"),
     Prof_Staff: app.Prof_Staff, Typ_Staff: app.Typ_Staff,
     Staff_Avail: app.Staff_Avail, No_Elderly: app.No_Elderly,
     No_Disable: app.No_Disable, Typ_Disability: app.Typ_Disability,
@@ -285,12 +326,58 @@ export function exportableCases(cases: Case[]): Case[] {
   return cases.filter(isDecidedCase);
 }
 
+/** Case number as the registers write it: `${NO}${NO_R}`, else caseNumber. */
+function caseLabel(caseItem: Case): string {
+  const { eg } = sections(caseItem);
+  const no = clean(eg.NO);
+  return no ? `${no}${clean(eg.NO_R)}` : caseItem.caseNumber;
+}
+
+/** Epoch ms of a case's D_Entry (its createdAt), or -Infinity if unparseable. */
+function entryTime(caseItem: Case): number {
+  const d = toExcelDate(caseItem.createdAt);
+  return d === "" ? Number.NEGATIVE_INFINITY : d.getTime();
+}
+
+/** NO as a number for ordering; non-numeric / missing sorts last. */
+function caseNo(caseItem: Case): number {
+  const { eg } = sections(caseItem);
+  const n = Number(clean(eg.NO).replace(/,/g, ""));
+  return clean(eg.NO) !== "" && Number.isFinite(n) ? n : Number.NEGATIVE_INFINITY;
+}
+
+/**
+ * Row order for every sheet: latest D_Entry first. D_Entry / DatEntry is the
+ * case's createdAt, compared as a real date (never as the d/m/yyyy text Excel
+ * shows). Ties — cases created together in one Stage 2 save — fall back to NO
+ * descending, then NO_R and case number descending, so the order is the same
+ * on every export. Returns a new array.
+ */
+export function sortByEntryDesc(cases: Case[]): Case[] {
+  return [...cases].sort((a, b) => {
+    const t = entryTime(b) - entryTime(a);
+    if (t !== 0 && !Number.isNaN(t)) return t;
+    const n = caseNo(b) - caseNo(a);
+    if (n !== 0 && !Number.isNaN(n)) return n;
+    const { eg: ea } = sections(a);
+    const { eg: eb } = sections(b);
+    const r = clean(eb.NO_R).localeCompare(clean(ea.NO_R));
+    if (r !== 0) return r;
+    return String(b.caseNumber ?? "").localeCompare(String(a.caseNumber ?? ""));
+  });
+}
+
 export interface ExcelExportResult {
   fileName: string;
   /** Rows in A_PA_Form / A_Record_Admin — every case in scope. */
   caseCount: number;
   /** Rows in A_EG_Form — the approved / rejected subset. */
   decidedCount: number;
+  /**
+   * Case numbers (NO+NO_R) whose A_PA_Form row has no extracted application
+   * form behind it — the application form needs re-uploading on those cases.
+   */
+  missingApplication: string[];
 }
 
 /**
@@ -298,12 +385,16 @@ export interface ExcelExportResult {
  * (browsers throttle or block three simultaneous downloads).
  *
  * Pass the whole scope (the selected tranche); this splits it per sheet. The
- * registers take every case, A_EG_Form only the decided ones.
+ * registers take every case, A_EG_Form only the decided ones. Rows are
+ * ordered latest D_Entry first on all three (see sortByEntryDesc); the input
+ * order does not matter.
  */
-export async function exportCasesToExcel(cases: Case[]): Promise<ExcelExportResult> {
-  if (cases.length === 0) {
+export async function exportCasesToExcel(input: Case[]): Promise<ExcelExportResult> {
+  if (input.length === 0) {
     throw new Error("No cases to export");
   }
+  // Every sheet in the same order: latest D_Entry on top.
+  const cases = sortByEntryDesc(input);
   const decided = exportableCases(cases);
   const [{ utils, write }, { default: PizZip }] = await Promise.all([
     import("xlsx"),
@@ -355,5 +446,10 @@ export async function exportCasesToExcel(cases: Case[]): Promise<ExcelExportResu
   } finally {
     setTimeout(() => URL.revokeObjectURL(url), 1000);
   }
-  return { fileName, caseCount: cases.length, decidedCount: decided.length };
+  return {
+    fileName,
+    caseCount: cases.length,
+    decidedCount: decided.length,
+    missingApplication: casesMissingApplicationData(cases).map(caseLabel),
+  };
 }
