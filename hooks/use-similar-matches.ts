@@ -7,6 +7,10 @@ interface SimilarMatchItem {
   /** The case's own tranche. Cases from the same tranche are excluded from
    *  results: they are still being decided, so they are not precedent. */
   tranche?: string;
+  /** The querying case's id (cases.id). Sent as `excludeCaseId` so a case
+   *  never lists its own corpus row (written once it is approved/rejected)
+   *  as a similar case. */
+  caseId?: string;
   PA_PName?: string;
   PA_Mod_No?: string;
   PA_Brand?: string;
@@ -24,7 +28,7 @@ interface SimilarMatchItem {
   [key: string]: any;
 }
 
-interface SimilarMatchesOptions {
+export interface SimilarMatchesOptions {
   item: SimilarMatchItem;
   datasetName: string;
   datasetType?: string;
@@ -69,6 +73,41 @@ interface UseSimilarMatchesReturn {
 }
 
 /**
+ * The tiered `/api/datasets/match` request for an item (see backend
+ * TieredMatchQueryDto). Exported for tests.
+ */
+export function buildSimilarMatchRequest(options: SimilarMatchesOptions) {
+  const item = options.item || {};
+  const egName = item.egName?.trim() || "";
+  const paName = item.PA_PName?.trim() || "";
+  return {
+    // EG form product name / model / brand are the search keys; the
+    // application (PA_*) values only fill in when the EG form is blank.
+    productName: egName || paName,
+    modelNo: item.egModel || item.PA_Mod_No || undefined,
+    brand: item.egBrand || item.PA_Brand || undefined,
+    elaborate: item.PA_Elaborate || item.PA_Justify || item.desc || undefined,
+    // EG form name/description appended to the semantic query only —
+    // mirrors App_PName + catalogueDesc so the query embeds into the
+    // same neighbourhood as the catalogue/EG rows we want to copy from.
+    extraText: [item.egName, item.egDesc].filter(Boolean).join(" ") || undefined,
+    // Secondary name: an extra tier-2 (fuzzy) query variant weighted
+    // below productName — the application name when the EG name leads.
+    // The backend drops it when identical to productName.
+    egName: (egName ? paName : "") || undefined,
+    category:
+      item.PA_Cat && item.PA_Cat.trim() && item.PA_Cat.trim() !== "/"
+        ? item.PA_Cat.trim()
+        : undefined,
+    excludeTranche: item.tranche?.trim() || undefined,
+    excludeCaseId: item.caseId?.trim() || undefined,
+    datasetName: options.datasetName,
+    datasetType: options.datasetType,
+    limit: options.limit ?? 10,
+  };
+}
+
+/**
  * Client hook for the tiered similar-case endpoint (`/api/datasets/match`).
  * Maps the item's PA_* fields into the tiered request shape.
  */
@@ -94,34 +133,7 @@ export function useSimilarMatches(): UseSimilarMatchesReturn {
 
       try {
         const token = localStorage.getItem("authToken") || "";
-        const item = options.item || {};
-
-        const egName = item.egName?.trim() || "";
-        const paName = item.PA_PName?.trim() || "";
-        const body = {
-          // EG form product name / model / brand are the search keys; the
-          // application (PA_*) values only fill in when the EG form is blank.
-          productName: egName || paName,
-          modelNo: item.egModel || item.PA_Mod_No || undefined,
-          brand: item.egBrand || item.PA_Brand || undefined,
-          elaborate: item.PA_Elaborate || item.PA_Justify || item.desc || undefined,
-          // EG form name/description appended to the semantic query only —
-          // mirrors App_PName + catalogueDesc so the query embeds into the
-          // same neighbourhood as the catalogue/EG rows we want to copy from.
-          extraText: [item.egName, item.egDesc].filter(Boolean).join(" ") || undefined,
-          // Secondary name: an extra tier-2 (fuzzy) query variant weighted
-          // below productName — the application name when the EG name leads.
-          // The backend drops it when identical to productName.
-          egName: (egName ? paName : "") || undefined,
-          category:
-            item.PA_Cat && item.PA_Cat.trim() && item.PA_Cat.trim() !== "/"
-              ? item.PA_Cat.trim()
-              : undefined,
-          excludeTranche: item.tranche?.trim() || undefined,
-          datasetName: options.datasetName,
-          datasetType: options.datasetType,
-          limit: options.limit ?? 10,
-        };
+        const body = buildSimilarMatchRequest(options);
 
         if (!body.productName) {
           throw new Error(
