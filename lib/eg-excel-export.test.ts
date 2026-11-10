@@ -14,7 +14,7 @@ import {
   exportCasesToExcel,
   exportableCases,
   hasApplicationData,
-  sortByEntryDesc,
+  sortByUpdatedDesc,
   toExcelDate,
   toExcelNumber,
 } from "@/lib/eg-excel-export";
@@ -383,42 +383,81 @@ describe("A_PA_Form when the application form was never extracted", () => {
 });
 
 // ---------------------------------------------------------------------------
-// Issue 4: rows ordered latest D_Entry first on every sheet.
+// Issue 4: rows ordered most recently updated first on every sheet.
 // ---------------------------------------------------------------------------
 
-describe("D_Entry ordering", () => {
-  const mk = (id: string, createdAt: string, no: number, status: Case["status"] = "approved"): Case => ({
+describe("updatedAt ordering", () => {
+  const mk = (
+    id: string,
+    createdAt: string,
+    updatedAt: string,
+    no: number,
+    status: Case["status"] = "approved",
+  ): Case => ({
     ...approved,
     id,
     status,
     createdAt,
+    updatedAt,
     caseNumber: `${no}P`,
     egData: { ...approved.egData, NO: no, NO_R: "P", Ref: `R${no}` },
   });
-  // Deliberately out of order; "updated" order would differ again.
-  const oldest = mk("oldest", "2026-01-05T02:00:00.000Z", 1500);
-  const middle = mk("middle", "2026-09-28T02:00:00.000Z", 1600, "pending");
-  // Same entry instant (one Stage 2 save) - tie broken by NO desc.
-  const newestLowNo = mk("newestLowNo", "2026-10-02T03:00:00.000Z", 1700, "rejected");
-  const newestHighNo = mk("newestHighNo", "2026-10-02T03:00:00.000Z", 1701);
-  // 10/02 vs 28/09: a d/m/yyyy string compare would put 28/09 first.
-  const input = [oldest, newestLowNo, middle, newestHighNo];
+  // Created first, but worked on most recently — must appear at the top.
+  const recentlyWorked = mk(
+    "recentlyWorked",
+    "2026-01-05T02:00:00.000Z",
+    "2026-10-10T09:00:00.000Z",
+    1500,
+  );
+  const middle = mk(
+    "middle",
+    "2026-09-28T02:00:00.000Z",
+    "2026-09-28T02:00:00.000Z",
+    1600,
+    "pending",
+  );
+  // Same updated instant — tie broken by NO desc.
+  const newerLowNo = mk(
+    "newerLowNo",
+    "2026-10-02T03:00:00.000Z",
+    "2026-10-02T03:00:00.000Z",
+    1700,
+    "rejected",
+  );
+  const newerHighNo = mk(
+    "newerHighNo",
+    "2026-10-02T03:00:00.000Z",
+    "2026-10-02T03:00:00.000Z",
+    1701,
+  );
+  const input = [recentlyWorked, newerLowNo, middle, newerHighNo];
 
-  it("sorts on the real date, latest first, NO desc on ties", () => {
-    expect(sortByEntryDesc(input).map((c) => c.id)).toEqual([
-      "newestHighNo", "newestLowNo", "middle", "oldest",
+  it("sorts by last updated, latest first, NO desc on ties", () => {
+    expect(sortByUpdatedDesc(input).map((c) => c.id)).toEqual([
+      "recentlyWorked", "newerHighNo", "newerLowNo", "middle",
     ]);
     // Input is not mutated, and the result does not depend on input order.
-    expect(input[0].id).toBe("oldest");
-    expect(sortByEntryDesc([...input].reverse()).map((c) => c.id)).toEqual(
-      sortByEntryDesc(input).map((c) => c.id),
+    expect(input[0].id).toBe("recentlyWorked");
+    expect(sortByUpdatedDesc([...input].reverse()).map((c) => c.id)).toEqual(
+      sortByUpdatedDesc(input).map((c) => c.id),
     );
   });
 
-  it("puts cases with no usable entry date last", () => {
-    const undated = { ...mk("undated", "", 9999) };
-    expect(sortByEntryDesc([undated, oldest]).map((c) => c.id)).toEqual([
-      "oldest", "undated",
+  it("puts a recently updated older case above a newer-created but less recently updated one", () => {
+    // A D_Entry (createdAt) sort would have put recentlyWorked last.
+    const createdOrder = [...input].sort(
+      (a, b) => new Date(b.createdAt!).getTime() - new Date(a.createdAt!).getTime(),
+    );
+    // A D_Entry sort puts the early-created recentlyWorked case last;
+    // updatedAt sort puts it first.
+    expect(createdOrder[createdOrder.length - 1].id).toBe("recentlyWorked");
+    expect(sortByUpdatedDesc(input)[0].id).toBe("recentlyWorked");
+  });
+
+  it("puts cases with no usable updatedAt last", () => {
+    const undated = { ...mk("undated", "2026-12-01T00:00:00.000Z", "", 9999) };
+    expect(sortByUpdatedDesc([undated, middle]).map((c) => c.id)).toEqual([
+      "middle", "undated",
     ]);
   });
 
@@ -456,10 +495,10 @@ describe("D_Entry ordering", () => {
         .sheet_to_json<Record<string, unknown>>(wb.Sheets[wb.SheetNames[0]])
         .map((r) => r.NO);
     };
-    expect(nos("A_PA_Form.xlsx")).toEqual([1701, 1700, 1600, 1500]);
-    expect(nos("A_Record_Admin.xlsx")).toEqual([1701, 1700, 1600, 1500]);
+    expect(nos("A_PA_Form.xlsx")).toEqual([1500, 1701, 1700, 1600]);
+    expect(nos("A_Record_Admin.xlsx")).toEqual([1500, 1701, 1700, 1600]);
     // A_EG_Form: decided only (1600 is pending), same order.
-    expect(nos("A_EG_Form.xlsx")).toEqual([1701, 1700, 1500]);
+    expect(nos("A_EG_Form.xlsx")).toEqual([1500, 1701, 1700]);
   });
 
   it("reports the cases exported without an application form", async () => {
@@ -472,7 +511,7 @@ describe("D_Entry ordering", () => {
     URL.revokeObjectURL = () => {};
     try {
       const r = await exportCasesToExcel([
-        oldest,
+        recentlyWorked,
         { ...middle, applicationData: {} },
       ]);
       expect(r.missingApplication).toEqual(["1600P"]);
