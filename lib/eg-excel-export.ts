@@ -333,9 +333,9 @@ function caseLabel(caseItem: Case): string {
   return no ? `${no}${clean(eg.NO_R)}` : caseItem.caseNumber;
 }
 
-/** Epoch ms of a case's D_Entry (its createdAt), or -Infinity if unparseable. */
-function entryTime(caseItem: Case): number {
-  const d = toExcelDate(caseItem.createdAt);
+/** Epoch ms of a case's last update (updatedAt), or -Infinity if unparseable. */
+function updatedTime(caseItem: Case): number {
+  const d = toExcelDate(caseItem.updatedAt);
   return d === "" ? Number.NEGATIVE_INFINITY : d.getTime();
 }
 
@@ -347,15 +347,16 @@ function caseNo(caseItem: Case): number {
 }
 
 /**
- * Row order for every sheet: latest D_Entry first. D_Entry / DatEntry is the
- * case's createdAt, compared as a real date (never as the d/m/yyyy text Excel
- * shows). Ties — cases created together in one Stage 2 save — fall back to NO
+ * Row order for every sheet: most recently updated / worked-on first
+ * (updatedAt). D_Entry / DatEntry column values stay as createdAt; only the
+ * row order uses updatedAt, compared as a real date (never as the d/m/yyyy
+ * text Excel shows). Ties — cases saved at the same instant — fall back to NO
  * descending, then NO_R and case number descending, so the order is the same
  * on every export. Returns a new array.
  */
-export function sortByEntryDesc(cases: Case[]): Case[] {
+export function sortByUpdatedDesc(cases: Case[]): Case[] {
   return [...cases].sort((a, b) => {
-    const t = entryTime(b) - entryTime(a);
+    const t = updatedTime(b) - updatedTime(a);
     if (t !== 0 && !Number.isNaN(t)) return t;
     const n = caseNo(b) - caseNo(a);
     if (n !== 0 && !Number.isNaN(n)) return n;
@@ -386,15 +387,15 @@ export interface ExcelExportResult {
  *
  * Pass the whole scope (the selected tranche); this splits it per sheet. The
  * registers take every case, A_EG_Form only the decided ones. Rows are
- * ordered latest D_Entry first on all three (see sortByEntryDesc); the input
+ * ordered most recently updated first on all three (see sortByUpdatedDesc); the input
  * order does not matter.
  */
 export async function exportCasesToExcel(input: Case[]): Promise<ExcelExportResult> {
   if (input.length === 0) {
     throw new Error("No cases to export");
   }
-  // Every sheet in the same order: latest D_Entry on top.
-  const cases = sortByEntryDesc(input);
+  // Every sheet in the same order: most recently updated on top.
+  const cases = sortByUpdatedDesc(input);
   const decided = exportableCases(cases);
   const [{ utils, write }, { default: PizZip }] = await Promise.all([
     import("xlsx"),
