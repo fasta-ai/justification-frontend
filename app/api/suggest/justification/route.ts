@@ -1,5 +1,6 @@
 import { NEXT_PUBLIC_API_URL, PYTHON_BACKEND_URL } from "@/lib/utils";
 import { NextRequest, NextResponse } from "next/server";
+import { resolveCurrentCaseForSuggest } from "@/lib/justification-current-case";
 
 function getAuthHeader(request: NextRequest): string | undefined {
   const header = request.headers.get("authorization");
@@ -13,14 +14,15 @@ export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
 
-    const { similar_matches, current_case, application_data, case_context, current_eg_remarks, action, case_id, user_context, reject_reason } = body;
+    const { similar_matches, current_case: rawCurrentCase, application_data, case_context, current_eg_remarks, action, case_id, user_context, reject_reason } = body;
 
-    if (!current_case) {
-      return NextResponse.json(
-        { error: "Missing required field: current_case" },
-        { status: 400 },
-      );
-    }
+    // Manual-entry cases often omit catalogue products. Rebuild a product
+    // profile from application_data / case_context rather than 400ing.
+    const current_case = resolveCurrentCaseForSuggest({
+      current_case: rawCurrentCase,
+      application_data,
+      case_context,
+    });
 
     // Get backend URL from environment variable
     const backendUrl = PYTHON_BACKEND_URL;

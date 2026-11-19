@@ -116,6 +116,7 @@ import {
   getEgSearchKeys,
 } from "@/components/justification-modal";
 import { CaseAuditLogDialog } from "@/components/case-audit-log-dialog";
+import { buildCurrentCaseForPrompt } from "@/lib/justification-current-case";
 import { toast } from "sonner";
 import type {
   Product,
@@ -1180,7 +1181,15 @@ export function Stage3Approval({ onBack }: Stage3ApprovalProps) {
               })) || [],
           );
 
-          const currentCase = selectedCase.catalogueData?.products;
+          const currentCase = buildCurrentCaseForPrompt(
+            selectedCase.catalogueData,
+            {
+              productName: egName,
+              model: egKeys.model,
+              brand: egKeys.brand,
+              description: egDesc,
+            },
+          );
           const appData = trimApplicationForPrompt(
             selectedCase.applicationData,
           );
@@ -1354,7 +1363,17 @@ export function Stage3Approval({ onBack }: Stage3ApprovalProps) {
           });
         }
 
-        const currentCase = selectedCase.catalogueData?.products;
+        // Manual entry often has no catalogue products[]; never send undefined
+        // (that 400s as "Missing required field: current_case").
+        const currentCase = buildCurrentCaseForPrompt(
+          selectedCase.catalogueData,
+          {
+            productName: inputs.egName || inputs.PA_PName,
+            model: inputs.egModel || inputs.PA_Mod_No,
+            brand: inputs.egBrand || inputs.PA_Brand,
+            description: inputs.egDesc,
+          },
+        );
         // Trim to prompt-relevant fields, then apply the user's edits from the
         // modal so the AI reflects the modal inputs, not the raw case.
         const appData = trimApplicationForPrompt(selectedCase.applicationData, {
