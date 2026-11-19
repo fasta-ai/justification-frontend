@@ -18,7 +18,9 @@
  * Column sources
  *   A_EG_Form      EG form fields (egData) + the reviewer's Q12/Q13 answers
  *                  (egData with the same fallbacks as the EG form download)
- *                  + the professional/beneficiary block from the PA form.
+ *                  + the professional/beneficiary block, preferring values
+ *                  stored on the live EG form and falling back to the PA form
+ *                  when the EG form has not stored the field.
  *   A_PA_Form      Case identity (egData) + application form (applicationData).
  *   A_Record_Admin The EG record-admin tracking columns (egData). Blank Yes/No
  *                  tracking columns take the same defaults Step 2 shows
@@ -174,11 +176,29 @@ function finish(columns: readonly string[], values: Record<string, unknown>): Ex
   return row;
 }
 
-/** A_EG_Form row: EG form + reviewer answers + PA professional/beneficiary block. */
+/**
+ * Prefer a value stored on the live EG form, including the "/" not-applicable
+ * marker. Fall back to the PA form only when the EG form has not stored the
+ * field at all. `pick` cannot be used here: it treats "/" as empty and would
+ * leak a stale PA value after an Excel update that set the marker.
+ */
+export function egThenApp(
+  eg: Record<string, unknown>,
+  app: Record<string, unknown>,
+  key: string,
+): unknown {
+  if (Object.prototype.hasOwnProperty.call(eg, key) && eg[key] !== undefined) {
+    return eg[key];
+  }
+  return app[key];
+}
+
+/** A_EG_Form row: EG form + reviewer answers + professional/beneficiary block. */
 export function buildEgFormRow(caseItem: Case): ExportRow {
   const { eg, app } = sections(caseItem);
   const defaults = deriveEgDefaults(caseItem);
   const egOr = (key: string) => pick(eg[key], defaults[key]);
+  const staffOrBene = (key: string) => egThenApp(eg, app, key);
   return finish(EG_FORM_COLUMNS, {
     ...identity(caseItem),
     Staff1: eg.Staff1, Staff2: eg.Staff2,
@@ -190,9 +210,9 @@ export function buildEgFormRow(caseItem: Case): ExportRow {
     D_ReqF_SWD: eg.D_ReqF_SWD, D_PlnT_SWD: eg.D_PlnT_SWD,
     SWD_Off_N: eg.SWD_Off_N, SWD_Off_P: eg.SWD_Off_P, SWD_Off_I: eg.SWD_Off_I,
     D_EGF_ASWD: eg.D_EGF_ASWD,
-    Prof_Staff: app.Prof_Staff, Typ_Staff: app.Typ_Staff,
-    No_Elderly: app.No_Elderly, No_Disable: app.No_Disable,
-    Typ_Disability: app.Typ_Disability, No_Bene: app.No_Bene,
+    Prof_Staff: staffOrBene("Prof_Staff"), Typ_Staff: staffOrBene("Typ_Staff"),
+    No_Elderly: staffOrBene("No_Elderly"), No_Disable: staffOrBene("No_Disable"),
+    Typ_Disability: staffOrBene("Typ_Disability"), No_Bene: staffOrBene("No_Bene"),
     Q12a: egOr("Q12a"),
     Q12b_Jus: egOr("Q12b_Jus"),
     Q12c_TotC: pick(eg.Q12c_TotC, app.TotAmtR),
