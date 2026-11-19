@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
+import Link from "next/link";
 import { ArrowLeft, CheckCircle2, RotateCcw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -63,7 +64,12 @@ function ImportsPage() {
             <p className="text-sm text-muted-foreground mt-1 max-w-2xl">
               Add already-vetted cases to the corpus that Stage 3 searches for
               precedents. The more tranches it holds, the better the suggested
-              justifications get.
+              justifications get. This does not update live EG forms. To update
+              existing EG form records from Excel, use{" "}
+              <Link href="/eg-table-update" className="underline underline-offset-2">
+                Update EG forms from Excel
+              </Link>
+              .
             </p>
           </div>
 
