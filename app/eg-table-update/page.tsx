@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
   ArrowLeft,
@@ -8,6 +8,7 @@ import {
   FileSpreadsheet,
   Loader2,
   AlertTriangle,
+  Upload,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
@@ -128,8 +129,10 @@ function matchKeyLabel(key?: Partial<MatchKey>): string {
 
 function EgTableUpdatePage() {
   const router = useRouter();
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [file, setFile] = useState<File | null>(null);
+  const [isDragging, setIsDragging] = useState(false);
   const [isChecking, setIsChecking] = useState(false);
   const [isApplying, setIsApplying] = useState(false);
   const [rejection, setRejection] = useState<FileRejection | null>(null);
@@ -350,12 +353,63 @@ function EgTableUpdatePage() {
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
-              <input
-                type="file"
-                accept=".xlsx,.xls,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel"
-                aria-label="EG Excel file"
-                onChange={(event) => onPickFile(event.target.files?.[0] ?? null)}
-              />
+              <div
+                onDragOver={(event) => {
+                  event.preventDefault();
+                  setIsDragging(true);
+                }}
+                onDragLeave={() => setIsDragging(false)}
+                onDrop={(event) => {
+                  event.preventDefault();
+                  setIsDragging(false);
+                  const dropped = event.dataTransfer.files?.[0];
+                  if (dropped) onPickFile(dropped);
+                }}
+                className={`rounded-lg border-2 border-dashed p-6 transition-colors ${
+                  isDragging
+                    ? "border-primary bg-primary/5"
+                    : "border-border hover:border-primary/50 hover:bg-muted/40"
+                } ${isChecking || isApplying ? "pointer-events-none opacity-60" : ""}`}
+              >
+                <label
+                  htmlFor="eg-excel-file"
+                  className="flex flex-col items-center justify-center gap-2 cursor-pointer text-center"
+                >
+                  <Upload className="w-8 h-8 text-muted-foreground" />
+                  <span className="text-base font-medium">
+                    {file
+                      ? "Drop a different file to replace, or click to choose"
+                      : "Drop an Excel file here, or click to choose"}
+                  </span>
+                  <span className="text-sm text-muted-foreground">
+                    .xlsx or .xls
+                  </span>
+                  {file ? (
+                    <span className="text-sm font-semibold text-foreground">
+                      Selected: {file.name}
+                    </span>
+                  ) : (
+                    <span className="text-sm text-muted-foreground">
+                      No file selected yet
+                    </span>
+                  )}
+                  <span className="inline-flex items-center rounded-md border bg-background px-4 py-2 text-sm font-medium shadow-sm">
+                    Choose file
+                  </span>
+                </label>
+                <input
+                  id="eg-excel-file"
+                  ref={fileInputRef}
+                  type="file"
+                  accept=".xlsx,.xls,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel"
+                  aria-label="EG Excel file"
+                  className="hidden"
+                  onChange={(event) => {
+                    onPickFile(event.target.files?.[0] ?? null);
+                    event.target.value = "";
+                  }}
+                />
+              </div>
               <div className="flex flex-wrap gap-2">
                 <Button
                   onClick={() => void checkFile()}
@@ -370,11 +424,6 @@ function EgTableUpdatePage() {
                     "Check file"
                   )}
                 </Button>
-                {file && (
-                  <p className="text-sm text-muted-foreground self-center">
-                    Selected: {file.name}
-                  </p>
-                )}
               </div>
             </CardContent>
           </Card>

@@ -105,8 +105,10 @@ describe("Update EG forms from Excel page", () => {
     const file = new File(["dummy"], fileName, {
       type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     });
-    const input = await screen.findByLabelText("EG Excel file");
+    expect(await screen.findByText("Choose file")).toBeInTheDocument();
+    const input = await screen.findByLabelText("EG Excel file", { hidden: true });
     await user.upload(input, file);
+    expect(await screen.findByText(`Selected: ${fileName}`)).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Check file" }));
     return user;
   }
