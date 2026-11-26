@@ -13,6 +13,7 @@ import {
   FileCheck,
   Users,
   DatabaseZap,
+  FileSpreadsheet,
 } from "lucide-react";
 import Image from "next/image";
 import Link from "next/link";
@@ -118,6 +119,19 @@ export function Sidebar({ mobileMenuOpen, setMobileMenuOpen }: SidebarProps) {
             }`}
           >
             <DatabaseZap className="w-5 h-5" />
+          </Link>
+
+          <Link
+            href="/eg-table-update"
+            title="Update EG forms from Excel"
+            aria-current={pathname === "/eg-table-update" ? "page" : undefined}
+            className={`p-3 rounded-lg transition-colors ${
+              pathname === "/eg-table-update"
+                ? "bg-primary text-primary-foreground"
+                : "hover:bg-accent text-foreground"
+            }`}
+          >
+            <FileSpreadsheet className="w-5 h-5" />
           </Link>
 
           {/* <Link
@@ -244,6 +258,20 @@ export function Sidebar({ mobileMenuOpen, setMobileMenuOpen }: SidebarProps) {
               >
                 <DatabaseZap className="w-4 h-4" />
                 Import previous cases
+              </Link>
+
+              <Link
+                href="/eg-table-update"
+                aria-current={pathname === "/eg-table-update" ? "page" : undefined}
+                className={`w-full flex items-center gap-3 px-4 py-2 rounded-lg text-sm font-medium ${
+                  pathname === "/eg-table-update"
+                    ? "bg-primary text-primary-foreground"
+                    : "hover:bg-accent text-foreground"
+                }`}
+                onClick={() => setMobileMenuOpen(false)}
+              >
+                <FileSpreadsheet className="w-4 h-4" />
+                Update EG forms from Excel
               </Link>
 
               {/* <Link

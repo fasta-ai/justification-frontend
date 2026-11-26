@@ -124,6 +124,48 @@ describe("buildEgFormRow", () => {
     expect(r.Q12a).toBe("No");
     expect(r.Q12f_RReject).toBe("");
   });
+  it("falls back to applicationData when the EG form has not stored the professional/beneficiary fields", () => {
+    expect(row.Prof_Staff).toBe("No");
+    expect(row.Typ_Staff).toBe("/");
+    expect(row.No_Elderly).toBe("/");
+    expect(row.No_Disable).toBe(60);
+    expect(row.Typ_Disability).toBe("/");
+    expect(row.No_Bene).toBe(30);
+  });
+  it("prefers live egData values after an Excel update, not stale applicationData", () => {
+    const r = buildEgFormRow({
+      ...approved,
+      egData: {
+        ...approved.egData,
+        Prof_Staff: "Yes",
+        Typ_Staff: "OT",
+        No_Elderly: 20,
+        No_Disable: 5,
+        Typ_Disability: "Physical",
+        No_Bene: 25,
+      },
+    });
+    expect(r.Prof_Staff).toBe("Yes");
+    expect(r.Typ_Staff).toBe("OT");
+    expect(r.No_Elderly).toBe(20);
+    expect(r.No_Disable).toBe(5);
+    expect(r.Typ_Disability).toBe("Physical");
+    expect(r.No_Bene).toBe(25);
+  });
+  it("keeps a stored '/' on the EG form rather than falling through to applicationData", () => {
+    const r = buildEgFormRow({
+      ...approved,
+      egData: {
+        ...approved.egData,
+        No_Disable: "/",
+        No_Bene: "/",
+        Prof_Staff: "/",
+      },
+    });
+    expect(r.No_Disable).toBe("/");
+    expect(r.No_Bene).toBe("/");
+    expect(r.Prof_Staff).toBe("/");
+  });
 });
 
 describe("buildPaFormRow", () => {
@@ -140,6 +182,20 @@ describe("buildPaFormRow", () => {
     expect(row.No_Bene).toBe(30);
     expect(row.PA_Elaborate).toBe("How.");
     expect(row.DatEntry).toEqual(new Date("2026-08-20T09:30:00.000Z"));
+  });
+  it("still exports the application as submitted when egData has later EG-table values", () => {
+    const r = buildPaFormRow({
+      ...approved,
+      egData: {
+        ...approved.egData,
+        Prof_Staff: "Yes",
+        Typ_Staff: "OT",
+        No_Bene: 25,
+      },
+    });
+    expect(r.Prof_Staff).toBe("No");
+    expect(r.Typ_Staff).toBe("/");
+    expect(r.No_Bene).toBe(30);
   });
 });
 
