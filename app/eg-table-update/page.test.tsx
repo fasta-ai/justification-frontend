@@ -308,4 +308,145 @@ describe("Update EG forms from Excel page", () => {
       await screen.findByText(/restored to their pre-update values/),
     ).toBeInTheDocument();
   });
+it("does not call a failed check 'not applicable' or the wrong format", async () => {
+    fetchMock.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/api/eg-excel-update/preview")) {
+        return jsonResponse({ statusCode: 500, message: "Internal server error" }, 500);
+      }
+      return jsonResponse({ batches: [] });
+    });
+
+    await uploadAndCheck();
+
+    expect(
+      await screen.findByText("The file could not be checked"),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(/does not mean the file is in the wrong format/i),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByText("This file is not applicable"),
+    ).not.toBeInTheDocument();
+    expect(screen.queryByText(/not applicable/i)).not.toBeInTheDocument();
+  });
+
+  it("says the file could not be checked when the preview response is not JSON", async () => {
+    fetchMock.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/api/eg-excel-update/preview")) {
+        return Promise.resolve(
+          new Response("<html>Gateway Timeout</html>", {
+            status: 502,
+            headers: { "Content-Type": "text/html" },
+          }),
+        );
+      }
+      return jsonResponse({ batches: [] });
+    });
+
+    await uploadAndCheck();
+
+    expect(
+      await screen.findByText("The file could not be checked"),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByText("This file is not applicable"),
+    ).not.toBeInTheDocument();
+  });
+
+  it("says the file could not be checked when the preview request fails before a result", async () => {
+    fetchMock.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/api/eg-excel-update/preview")) {
+        return Promise.reject(new TypeError("Failed to fetch"));
+      }
+      return jsonResponse({ batches: [] });
+    });
+
+    await uploadAndCheck();
+
+    expect(
+      await screen.findByText("The file could not be checked"),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(/failed before any result came back/i),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByText("This file is not applicable"),
+    ).not.toBeInTheDocument();
+  });
+
+  it("still shows a specific format error as not applicable", async () => {
+    fetchMock.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/api/eg-excel-update/preview")) {
+        return jsonResponse({
+          applicable: false,
+          code: "not_eg_table",
+          reason:
+            "The file is not applicable. The Q12b_Jus column is missing, so the file is not recognised as an EG table. No records were changed.",
+        });
+      }
+      return jsonResponse({ batches: [] });
+    });
+
+    await uploadAndCheck("missing-marker.xlsx");
+
+    expect(
+      await screen.findByText("This file is not applicable"),
+    ).toBeInTheDocument();
+    expect(screen.getByText(/Q12b_Jus column is missing/i)).toBeInTheDocument();
+    expect(
+      screen.queryByText("The file could not be checked"),
+    ).not.toBeInTheDocument();
+  });
+
+  it("renders a compact sampled preview using the full-file totals", async () => {
+    fetchMock.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/api/eg-excel-update/preview")) {
+        return jsonResponse({
+          ...previewOk,
+          acceptedRows: previewOk.acceptedRows,
+          summary: {
+            totalDataRows: 8101,
+            accepted: 8101,
+            wouldUpdate: 7473,
+            unchanged: 628,
+            unmatched: 0,
+            issues: 0,
+            skipped: 0,
+          },
+          sample: {
+            limit: 50,
+            acceptedShown: 1,
+            acceptedOmitted: 7472,
+            unmatchedShown: 0,
+            unmatchedOmitted: 0,
+            issuesShown: 0,
+            issuesOmitted: 0,
+          },
+          unmatchedRows: [],
+          issueRows: [],
+        });
+      }
+      return jsonResponse({ batches: [] });
+    });
+
+    await uploadAndCheck();
+
+    expect(await screen.findByText("Preview")).toBeInTheDocument();
+    expect(
+      screen.getByText(/All 8101 rows were checked/i),
+    ).toBeInTheDocument();
+    expect(screen.getByText(/7473 would be updated/i)).toBeInTheDocument();
+    expect(
+      screen.getByText(/Showing 1 of 7473 rows that would change/i),
+    ).toBeInTheDocument();
+    expect(screen.getByText(/Updated justification from Excel/)).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Confirm update" }),
+    ).toBeEnabled();
+  });
 });
