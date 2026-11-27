@@ -60,6 +60,16 @@ type IssueRow = {
   kind: "invalid" | "unmatched" | "duplicate";
 };
 
+type PreviewSampleInfo = {
+  limit: number;
+  acceptedShown: number;
+  acceptedOmitted: number;
+  unmatchedShown: number;
+  unmatchedOmitted: number;
+  issuesShown: number;
+  issuesOmitted: number;
+};
+
 type PreviewResult = {
   applicable: true;
   sourceFileName: string;
@@ -72,14 +82,26 @@ type PreviewResult = {
     accepted: number;
     unmatched: number;
     issues: number;
+    wouldUpdate?: number;
+    unchanged?: number;
+    skipped?: number;
   };
+  sample?: PreviewSampleInfo;
 };
 
 type FileRejection = {
   applicable: false;
   reason: string;
   code?: string;
+  /** True when the check request itself failed, not when the file format is wrong. */
+  checkFailed?: boolean;
 };
+
+const CHECK_FAILED_MESSAGE =
+  "The file could not be checked. This does not mean the file is in the wrong format. The check request did not come back with a result. You can try again, or upload a smaller set of rows if you only need to update some of them.";
+
+const CHECK_FAILED_NETWORK_MESSAGE =
+  "The file could not be checked. This does not mean the file is in the wrong format. The check request failed before any result came back. You can try again.";
 
 type ApplySuccess = {
   applied: true;
@@ -125,6 +147,33 @@ function matchKeyLabel(key?: Partial<MatchKey>): string {
   return [key.Ref, key.Tranche, key.EB_RM, key.NO, key.NO_R]
     .filter((part) => part !== undefined && part !== null && part !== "")
     .join(" · ");
+}
+
+function previewWouldUpdate(preview: PreviewResult): number {
+  return (
+    preview.summary.wouldUpdate ??
+    preview.acceptedRows.filter((row) => row.changes.length > 0).length
+  );
+}
+
+function previewSummaryText(preview: PreviewResult): string {
+  const total = preview.summary.totalDataRows;
+  const wouldUpdate = previewWouldUpdate(preview);
+  const unchanged = preview.summary.unchanged ?? 0;
+  const skipped =
+    preview.summary.skipped != null
+      ? ` (${preview.summary.skipped} will be skipped)`
+      : "";
+  return (
+    `Format accepted from ${preview.sourceFileName} (sheet ${preview.sheetName}). ` +
+    `All ${total} row${total === 1 ? "" : "s"} were checked: ` +
+    `${preview.summary.accepted} match an official form, ` +
+    `${wouldUpdate} would be updated, ` +
+    `${unchanged} unchanged, ` +
+    `${preview.summary.unmatched} unmatched, ` +
+    `${preview.summary.issues} with row-level issues${skipped}. ` +
+    `No data has been written yet.`
+  );
 }
 
 function EgTableUpdatePage() {
@@ -202,9 +251,8 @@ function EgTableUpdatePage() {
       if (!res.ok || !body || body.applicable !== true) {
         setRejection({
           applicable: false,
-          reason:
-            body.reason ||
-            "The file is not applicable. It could not be checked.",
+          checkFailed: true,
+          reason: CHECK_FAILED_MESSAGE,
         });
         return;
       }
@@ -212,8 +260,8 @@ function EgTableUpdatePage() {
     } catch {
       setRejection({
         applicable: false,
-        reason:
-          "The file is not applicable. The preview request failed before any data could be checked.",
+        checkFailed: true,
+        reason: CHECK_FAILED_NETWORK_MESSAGE,
       });
     } finally {
       setIsChecking(false);
@@ -431,7 +479,11 @@ function EgTableUpdatePage() {
           {rejection && (
             <Alert variant="destructive" className="mb-6" role="alert">
               <AlertTriangle className="w-4 h-4" />
-              <AlertTitle>This file is not applicable</AlertTitle>
+              <AlertTitle>
+                {rejection.checkFailed
+                  ? "The file could not be checked"
+                  : "This file is not applicable"}
+              </AlertTitle>
               <AlertDescription>{rejection.reason}</AlertDescription>
             </Alert>
           )}
@@ -471,18 +523,19 @@ function EgTableUpdatePage() {
             <Card className="mb-6">
               <CardHeader>
                 <CardTitle className="text-lg">Preview</CardTitle>
-                <CardDescription>
-                  Format accepted from {preview.sourceFileName} (sheet{" "}
-                  {preview.sheetName}). {preview.summary.accepted} row
-                  {preview.summary.accepted === 1 ? "" : "s"} can be updated,{" "}
-                  {preview.summary.unmatched} unmatched,{" "}
-                  {preview.summary.issues} with row-level issues. No data has
-                  been written yet.
-                </CardDescription>
+                <CardDescription>{previewSummaryText(preview)}</CardDescription>
               </CardHeader>
               <CardContent className="space-y-6">
                 <section>
                   <h2 className="font-medium mb-2">Rows to update</h2>
+                  {preview.sample && preview.sample.acceptedOmitted > 0 ? (
+                    <p className="text-sm text-muted-foreground mb-2">
+                      Showing {preview.sample.acceptedShown} of{" "}
+                      {previewWouldUpdate(preview)} row
+                      {previewWouldUpdate(preview) === 1 ? "" : "s"} that would
+                      change. The totals above cover the whole file.
+                    </p>
+                  ) : null}
                   {preview.acceptedRows.length === 0 ? (
                     <p className="text-sm text-muted-foreground">
                       No accepted rows to update.
@@ -520,6 +573,12 @@ function EgTableUpdatePage() {
 
                 <section>
                   <h2 className="font-medium mb-2">Unmatched rows</h2>
+                  {preview.sample && preview.sample.unmatchedOmitted > 0 ? (
+                    <p className="text-sm text-muted-foreground mb-2">
+                      Showing {preview.sample.unmatchedShown} of{" "}
+                      {preview.summary.unmatched} unmatched rows.
+                    </p>
+                  ) : null}
                   {preview.unmatchedRows.length === 0 ? (
                     <p className="text-sm text-muted-foreground">
                       None. Unmatched rows are not inserted as new live EG forms.
@@ -548,6 +607,12 @@ function EgTableUpdatePage() {
 
                 <section>
                   <h2 className="font-medium mb-2">Row-level issues</h2>
+                  {preview.sample && preview.sample.issuesOmitted > 0 ? (
+                    <p className="text-sm text-muted-foreground mb-2">
+                      Showing {preview.sample.issuesShown} of{" "}
+                      {preview.summary.issues} rows with issues.
+                    </p>
+                  ) : null}
                   {preview.issueRows.length === 0 ? (
                     <p className="text-sm text-muted-foreground">
                       None.
@@ -577,7 +642,7 @@ function EgTableUpdatePage() {
                 <div className="flex flex-wrap gap-2">
                   <Button
                     onClick={() => void confirmUpdate()}
-                    disabled={isApplying || preview.acceptedRows.length === 0}
+                    disabled={isApplying || preview.summary.accepted === 0}
                   >
                     {isApplying ? (
                       <>
